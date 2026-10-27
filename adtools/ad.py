@@ -206,7 +206,7 @@ class Membership:
             "cn": o.get("cn"),
             "type": o.object_class,
             "membership": self.via,
-            "via groups": "; ".join(self.parents),
+            "via groups": list(self.parents),
             "mail": o.get("mail"),
             "description": o.get("description"),
             "dn": o.dn,
@@ -224,6 +224,9 @@ class GroupsResult:
     principal: DirectoryObject
     groups: list[Membership]
     nested: bool
+    # Hierarchy links, keyed by lowercase DN: member -> {group it is directly in: "direct" | "primary group" | "nested"}.
+    # The principal's own key is ``principal.dn.lower()``.
+    edges: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -231,6 +234,8 @@ class MembersResult:
     group: DirectoryObject
     members: list[Membership]
     nested: bool
+    # Hierarchy links, keyed by lowercase DN: group -> {direct member: "direct" | "primary group" | "nested"}.
+    edges: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -457,88 +462,106 @@ class ADClient:
         """Groups a user is a member of: direct, nested (transitive) and the primary group.
 
         Nesting is followed upward through each group's ``memberOf``, one level per
-        round trip, so every nested group records the group(s) it is reached through.
+        round trip. Every link is kept in ``edges`` (for the hierarchy view) and every
+        nested group records the group(s) it is reached through.
         """
         principal = self.find_principal(identity)
+        root = principal.dn.lower()
         dn = escape_filter_value(principal.dn)
         found: dict[str, Membership] = {}
+        links: dict[str, dict[str, str]] = {root: {}}
         for g in self.search(f"(&(objectClass=group)(member={dn}))", (*GROUP_ATTRS, "memberOf")):
             found[g.dn.lower()] = Membership(g, direct=True)
+            links[root][g.dn.lower()] = "direct"
         primary = self._primary_group(principal)
-        if primary is not None and primary.dn.lower() not in found:
-            found[primary.dn.lower()] = Membership(primary, direct=True, primary=True)
+        if primary is not None:
+            links[root].setdefault(primary.dn.lower(), "primary group")
+            if primary.dn.lower() not in found:
+                found[primary.dn.lower()] = Membership(primary, direct=True, primary=True)
         frontier = list(found.values())
         depth = 0
         while nested and frontier and depth < MAX_NESTING_DEPTH:
             depth += 1
-            wanted: dict[str, tuple[str, list[str]]] = {}
+            wanted: dict[str, str] = {}
             for child in frontier:
+                child_key = child.obj.dn.lower()
                 for parent_dn in child.obj.get_all("memberOf"):
-                    key = parent_dn.lower()
-                    if key in found:
-                        _add_parent(found[key], child.obj.name)
-                    else:
-                        wanted.setdefault(key, (parent_dn, []))[1].append(child.obj.name)
+                    links.setdefault(child_key, {})[parent_dn.lower()] = "nested"
+                    if parent_dn.lower() not in found:
+                        wanted.setdefault(parent_dn.lower(), parent_dn)
             frontier = []
-            for g in self._groups_by_dn([dn for dn, _ in wanted.values()]):
-                key = g.dn.lower()
-                if key not in found:
-                    found[key] = Membership(g, direct=False, parents=sorted(set(wanted.get(key, ("", []))[1])))
-                    frontier.append(found[key])
+            for g in self._groups_by_dn(list(wanted.values())):
+                if g.dn.lower() not in found:
+                    found[g.dn.lower()] = Membership(g, direct=False)
+                    frontier.append(found[g.dn.lower()])
         if frontier and depth >= MAX_NESTING_DEPTH:
             log.warning("stopped expanding nested groups at depth %s", MAX_NESTING_DEPTH)
+        edges = _prune(links, set(found) | {root})
+        for child_key, parents in edges.items():
+            for parent_key in parents:
+                if child_key != root:
+                    _add_parent(found[parent_key], found[child_key].obj.name)
         groups = sorted(found.values(), key=_sort_key)
-        return GroupsResult(principal, groups, nested)
+        return GroupsResult(principal, groups, nested, edges)
 
     def group_members(self, identity: str, nested: bool = True) -> MembersResult:
         """Members of a group: direct, nested (transitive) and accounts using a group as their primary group.
 
         Nesting is followed downward with batched ``memberOf`` queries, one level per
-        round trip, so every nested member records the group(s) it is reached through.
+        round trip. Every link is kept in ``edges`` (for the hierarchy view) and every
+        nested member records the group(s) it is reached through.
         """
         group = self.find_group(identity)
+        root = group.dn.lower()
         attrs = (*PRINCIPAL_ATTRS, "memberOf")
         members: dict[str, Membership] = {}
+        links: dict[str, dict[str, str]] = {root: {}}
         for m in self.search(f"(memberOf={escape_filter_value(group.dn)})", attrs):
             members[m.dn.lower()] = Membership(m, direct=True)
+            links[root][m.dn.lower()] = "direct"
         rid = _rid(group)
         if rid is not None:
             for m in self.search(f"(primaryGroupID={rid})", attrs):
                 members.setdefault(m.dn.lower(), Membership(m, direct=True, primary=True))
+                links[root].setdefault(m.dn.lower(), "primary group")
         frontier = [m for m in members.values() if m.obj.object_class == "group"]
-        seen_groups = {group.dn.lower()} | {m.obj.dn.lower() for m in frontier}
+        expanded = {root} | {m.obj.dn.lower() for m in frontier}
         depth = 0
         while nested and frontier and depth < MAX_NESTING_DEPTH:
             depth += 1
-            names = {m.obj.dn.lower(): m.obj.name for m in frontier}
+            level = {m.obj.dn.lower(): m for m in frontier}
             next_frontier: list[Membership] = []
 
-            def record(obj: DirectoryObject, parents: list[str], next_frontier: list[Membership] = next_frontier) -> None:
+            def record(obj: DirectoryObject, parent_keys: list[str], kind: str, next_frontier=next_frontier) -> None:
                 key = obj.dn.lower()
-                if key in members:
-                    for p in parents:
-                        _add_parent(members[key], p)
-                    return
-                members[key] = Membership(obj, direct=False, parents=sorted(set(parents)))
-                if obj.object_class == "group" and key not in seen_groups:
-                    seen_groups.add(key)
+                for parent_key in parent_keys:
+                    links.setdefault(parent_key, {}).setdefault(key, kind)
+                if key not in members:
+                    members[key] = Membership(obj, direct=False)
+                if obj.object_class == "group" and key not in expanded:
+                    expanded.add(key)
                     next_frontier.append(members[key])
 
-            for chunk in _batched(list(names)):
-                clauses = "".join(f"(memberOf={escape_filter_value(m.obj.dn)})" for m in frontier if m.obj.dn.lower() in chunk)
+            for chunk in _batched(list(level)):
+                clauses = "".join(f"(memberOf={escape_filter_value(level[k].obj.dn)})" for k in chunk)
                 for obj in self.search(f"(|{clauses})", attrs):
-                    record(obj, [names[p.lower()] for p in obj.get_all("memberOf") if p.lower() in names])
-            rids = {r: m.obj.name for m in frontier if (r := _rid(m.obj)) is not None}
-            for chunk in _batched(sorted(rids)):
+                    record(obj, [p.lower() for p in obj.get_all("memberOf") if p.lower() in level], "nested")
+            rids = {r: k for k, m in level.items() if (r := _rid(m.obj)) is not None}
+            for chunk in _batched([str(r) for r in sorted(rids)]):
                 clauses = "".join(f"(primaryGroupID={r})" for r in chunk)
                 for obj in self.search(f"(|{clauses})", attrs):
                     pgid = int(obj.get("primaryGroupID") or 0)
-                    record(obj, [rids[pgid]] if pgid in rids else [])
+                    record(obj, [rids[pgid]] if pgid in rids else [], "primary group")
             frontier = next_frontier
         if frontier and depth >= MAX_NESTING_DEPTH:
             log.warning("stopped expanding nested members at depth %s", MAX_NESTING_DEPTH)
+        edges = _prune(links, set(members) | {root})
+        for parent_key, children in edges.items():
+            for child_key in children:
+                if parent_key != root:
+                    _add_parent(members[child_key], members[parent_key].obj.name)
         ordered = sorted(members.values(), key=_sort_key)
-        return MembersResult(group, ordered, nested)
+        return MembersResult(group, ordered, nested, edges)
 
     def compare_users(self, first: str, second: str, nested: bool = True) -> CompareResult:
         return CompareResult(self.user_groups(first, nested), self.user_groups(second, nested))
@@ -553,6 +576,11 @@ def _add_parent(membership: Membership, parent: str) -> None:
     if not membership.direct and parent not in membership.parents:
         membership.parents.append(parent)
         membership.parents.sort()
+
+
+def _prune(links: dict[str, dict[str, str]], keep: set[str]) -> dict[str, dict[str, str]]:
+    """Drop links to objects that were not returned (outside the search base, or not groups)."""
+    return {a: {b: kind for b, kind in targets.items() if b in keep} for a, targets in links.items() if a in keep}
 
 
 def _rid(obj: DirectoryObject) -> int | None:

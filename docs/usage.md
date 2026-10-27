@@ -42,13 +42,64 @@ printed:
 | `search` | `search/` | `20261027-142502_search.html` |
 
 - **HTML** is one self-contained file with no external requests, so you can open it offline, email it or
-  attach it to a ticket. It has a summary panel, and tables you can click to sort and filter as you type.
-  It follows the light or dark setting of the system. A coloured pill shows how each row is connected:
-  *direct*, *nested* or *primary group*. Disabled accounts are highlighted.
-- **JSON** has `report`, `title`, `generated`, `summary` and `sections[].rows[]`, for scripting.
+  attach it to a ticket. It follows the system's light or dark setting. A coloured pill shows how each row
+  is connected: *direct*, *nested* or *primary group*. Disabled accounts are highlighted. The page has:
+  - a **summary** panel;
+  - a collapsible **Hierarchy** tree for `groups` and `members` (see [below](#hierarchy-view));
+  - tables with **Excel-style column filters** (see [below](#filtering-tables)).
+- **JSON** has `report`, `title`, `generated`, `summary`, `tree` (for `groups` and `members`) and
+  `sections[].rows[]`, for scripting. `via groups` is a list.
 - **CSV** has one row per table row, with a `section` column (for example `Only jdoe`, `In common`).
 
 Reports contain directory data. The `reports/` folder is in `.gitignore`.
+
+### Filtering tables
+
+Every column header works like an Excel AutoFilter:
+
+- **Click the column name** to sort it, and click again to reverse the order.
+- **Click ▾** to open the column's filter panel:
+  - **Sort A → Z / Z → A**.
+  - **Search** narrows the list of values. Pressing **OK** (or Enter) while searching keeps only the
+    values that match, like Excel's "Select all search results".
+  - **Checkboxes** list every distinct value with its row count. *(Select all)* toggles them all, and
+    *(Blanks)* stands for empty cells.
+  - **OK** applies the filter. **Clear filter** removes it from that column.
+- **Filters combine** across columns. Each column's value list (and its counts) only includes rows that
+  pass the other columns' filters, as in Excel.
+- **Multi-valued cells**, such as `via groups` or attributes from `search` that hold several values, list
+  each value separately. A row matches if any of its values is selected.
+- A filtered column's ▾ button is highlighted. The bar above the table shows "Showing X of Y rows" and a
+  **Clear all filters** link.
+- **Search all columns** is a quick text search across the whole row. It combines with the column filters.
+
+Press Escape or click outside the panel to close it without applying. Filters only change what's shown on
+the page. To keep a filtered copy, use your browser's print or save, or filter the CSV in a spreadsheet.
+
+### Hierarchy view
+
+`groups` and `members` reports start with a **Hierarchy** tree that shows how each membership comes about,
+level by level:
+
+```
+jdoe [user]
+├── Domain Users [primary group]
+│   └── Remote Access [nested]
+├── Engineering
+│   ├── All Staff [nested]
+│   └── VPN Users [nested]
+└── VPN Users
+```
+
+- `groups`: the user, then the groups they're directly in, then the groups *those* are in, and so on.
+- `members`: the group, then its members, then the members of each member group, and so on.
+- **A group reached by more than one route** appears under every parent, but its own subtree is expanded
+  only the first time. Later copies are marked *(shown above)*.
+- **A loop** (A contains B contains A) is marked *(cycle)* where it closes.
+- In HTML, the first two levels start open. **Expand all** and **Collapse all** sit above the tree, and
+  hovering a name shows its DN.
+- The same tree is printed with `--stdout` and saved as `tree` in JSON.
+- `compare` has no tree. Use the `via` columns there, or run `groups` for each user.
 
 ## How users and groups are looked up
 

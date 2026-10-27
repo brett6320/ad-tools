@@ -13,6 +13,7 @@ from adtools.report import (
     render_text,
     search_report,
     slugify,
+    tree_lines,
     user_groups_report,
     write_report,
 )
@@ -357,3 +358,55 @@ def test_client_search_sends_time_limit_below_client_timeout(monkeypatch):
     client = ad_module.ADClient(server="dc", domain="x.com", timeout=1.5, connection=Conn())
     list(client.search("(cn=x)"))
     assert seen["time_limit"] == 0
+
+
+def test_tree_in_text_json_and_html(fake, tmp_path):
+    report = user_groups_report(fake.user_groups("jdoe"))
+    assert render_text(report).split("Hierarchy\n---------\n")[1].split("\n\n")[0].splitlines() == [
+        "jdoe [user]",
+        "├── Domain Users [primary group]",
+        "│   └── Remote Access [nested]",
+        "├── Engineering",
+        "│   ├── All Staff [nested]",
+        "│   └── VPN Users [nested]",
+        "└── VPN Users",
+    ]
+    data = json.loads(write_report(report, tmp_path, ("json",))[0].read_text())
+    assert data["tree"]["name"] == "jdoe"
+    assert [c["name"] for c in data["tree"]["children"]] == ["Domain Users", "Engineering", "VPN Users"]
+    assert data["tree"]["children"][1]["children"][0] == {
+        "name": "All Staff",
+        "type": "group",
+        "dn": "CN=All Staff,OU=Groups,DC=corp,DC=example,DC=com",
+        "link": "nested",
+    }
+    html_text = render_html(report)
+    assert '<ul class="tree" id="tree">' in html_text and "data-tree-action" in html_text
+    assert html_text.count('class="xf-btn"') == len(report.sections[0].columns)
+
+
+def test_tree_marks_repeats_and_cycles(fake):
+    d = fake.directory
+    a = d.group("CycleA", 4001, members=["CN=jdoe,OU=Users,DC=corp,DC=example,DC=com"])
+    b = d.group("CycleB", 4002, members=[a])
+    d.objects[a]["member"].append(b.encode())
+    lines = tree_lines(user_groups_report(fake.user_groups("jdoe")).tree)
+    assert any(line.endswith("CycleA [nested, cycle]") for line in lines)
+    members = tree_lines(group_members_report(fake.group_members("All Staff")).tree)
+    assert "asmith [user, nested]" in "\n".join(members)
+    repeat = fake.directory
+    top = repeat.group("Top", 4101)
+    left = repeat.group("Left", 4102, members=["CN=Engineering,OU=Groups,DC=corp,DC=example,DC=com"])
+    right = repeat.group("Right", 4103, members=["CN=Engineering,OU=Groups,DC=corp,DC=example,DC=com"])
+    repeat.objects[top]["member"] = [left.encode(), right.encode()]
+    text = "\n".join(tree_lines(group_members_report(fake.group_members("Top")).tree))
+    assert text.count("Engineering [nested]") == 1 and "Engineering [nested, shown above]" in text
+
+
+def test_tree_and_filter_data_are_escaped(fake):
+    fake.directory.group('<img src=x onerror=alert(1)>"', 4500, members=["CN=jdoe,OU=Users,DC=corp,DC=example,DC=com"])
+    fake.directory.group("Outer", 4501, members=['CN=<img src=x onerror=alert(1)>",OU=Groups,DC=corp,DC=example,DC=com'])
+    html_text = render_html(user_groups_report(fake.user_groups("jdoe")))
+    assert "<img" not in html_text
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html_text
+    assert r'data-v="[&quot;&lt;img src=x onerror=alert(1)&gt;\&quot;&quot;]"' in html_text  # Outer's via groups

@@ -167,8 +167,8 @@ def test_nested_groups_record_the_path(ad):
     result = ad.user_groups("jdoe")
     assert vias(result.groups) == {"All Staff": ["Engineering"], "Remote Access": ["Domain Users"]}
     row = next(m for m in result.groups if m.obj.name == "All Staff").as_dict()
-    assert row["via groups"] == "Engineering"
-    assert next(m for m in result.groups if m.obj.name == "Engineering").as_dict()["via groups"] == ""
+    assert row["via groups"] == ["Engineering"]
+    assert next(m for m in result.groups if m.obj.name == "Engineering").as_dict()["via groups"] == []
 
 
 def test_nested_members_record_the_path(ad):
