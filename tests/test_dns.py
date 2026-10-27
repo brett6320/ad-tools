@@ -246,13 +246,14 @@ def test_discover_over_udp_with_site_first_and_foreign_targets_dropped(fake_dns,
     assert hosts[0] == "dc-hq.corp.example.com"
     assert set(hosts) == {"dc-hq.corp.example.com", "dc1.corp.example.com", "dc-dr.corp.example.com"}
     assert hosts[-1] == "dc-dr.corp.example.com"  # higher priority value = later
-    assert "dc.attacker.net" in caplog.text and "outside" in caplog.text
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == ["ignoring DC dc.attacker.net from _ldap._tcp.dc._msdcs.corp.example.com: it is outside corp.example.com"]
 
 
 def test_discover_retries_over_tcp_when_truncated(fake_dns):
     server = fake_dns(ZONE, truncate=True)
     hosts = discover_domain_controllers("corp.example.com", nameservers=["10.0.0.10"])
-    assert "dc1.corp.example.com" in hosts
+    assert set(hosts) == {"dc1.corp.example.com", "dc-hq.corp.example.com", "dc-dr.corp.example.com"}
     assert server.queries.count("_ldap._tcp.dc._msdcs.corp.example.com") == 2  # UDP then TCP
 
 
