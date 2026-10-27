@@ -25,8 +25,8 @@ from .ad import CompareResult, DirectoryObject, GroupsResult, MembersResult
 
 FORMATS = ("html", "json", "csv")
 
-GROUP_COLUMNS = ("name", "membership", "scope", "kind", "mail", "description", "dn")
-MEMBER_COLUMNS = ("name", "type", "membership", "disabled", "mail", "description", "dn")
+GROUP_COLUMNS = ("name", "membership", "via groups", "scope", "kind", "mail", "description", "dn")
+MEMBER_COLUMNS = ("name", "type", "membership", "via groups", "disabled", "mail", "description", "dn")
 
 
 @dataclass
@@ -121,6 +121,7 @@ def compare_report(result: CompareResult) -> Report:
     for ma, mb in result.common:
         row = ma.as_dict()
         row.pop("membership")
+        row.pop("via groups")
         row[f"{a.name} via"] = ma.via
         row[f"{b.name} via"] = mb.via
         common_rows.append(row)

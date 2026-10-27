@@ -339,3 +339,21 @@ def test_server_label_and_failover_warning(monkeypatch, caplog):
     with ad_module.ADClient(server="down,up", domain="x.com", ssl_context=object()) as client:
         assert client.server == "up:636 (LDAPS, TLSv1.3)"
     assert "down:636 failed: connection refused" in caplog.text
+
+
+def test_client_search_sends_time_limit_below_client_timeout(monkeypatch):
+    seen = {}
+
+    class Conn:
+        _sock = object()
+
+        def search(self, base, f, attrs, **kw):
+            seen.update(kw)
+            return iter(())
+
+    client = ad_module.ADClient(server="dc", domain="x.com", timeout=90, connection=Conn())
+    list(client.search("(cn=x)"))
+    assert seen["time_limit"] == 89
+    client = ad_module.ADClient(server="dc", domain="x.com", timeout=1.5, connection=Conn())
+    list(client.search("(cn=x)"))
+    assert seen["time_limit"] == 0

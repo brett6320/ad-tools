@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from adtools.ad import (
+    IN_CHAIN,
     AmbiguousError,
     DirectoryObject,
     NotFoundError,
@@ -156,3 +157,73 @@ def test_directory_object_helpers():
     assert o.disabled is False
     assert o.name == "CN=x"
     assert DirectoryObject("CN=y", {"objectClass": ["top", "msDS-Thing"]}).object_class == "msds-thing"
+
+
+def vias(memberships):
+    return {m.obj.name: m.parents for m in memberships if not m.direct}
+
+
+def test_nested_groups_record_the_path(ad):
+    result = ad.user_groups("jdoe")
+    assert vias(result.groups) == {"All Staff": ["Engineering"], "Remote Access": ["Domain Users"]}
+    row = next(m for m in result.groups if m.obj.name == "All Staff").as_dict()
+    assert row["via groups"] == "Engineering"
+    assert next(m for m in result.groups if m.obj.name == "Engineering").as_dict()["via groups"] == ""
+
+
+def test_nested_members_record_the_path(ad):
+    result = ad.group_members("VPN Users")
+    assert vias(result.members) == {"asmith": ["Engineering"], "Platform": ["Engineering"], "olduser": ["Engineering"]}
+
+
+def test_no_in_chain_queries(ad):
+    """LDAP_MATCHING_RULE_IN_CHAIN can run for minutes on big domains; membership must not use it."""
+    ad.user_groups("jdoe")
+    ad.group_members("All Staff")
+    assert not [q for q in ad.directory.queries if IN_CHAIN in q]
+
+
+def test_membership_cycles_terminate(ad):
+    d = ad.directory
+    a = d.group("CycleA", 4001, members=["CN=jdoe,OU=Users,DC=corp,DC=example,DC=com"])
+    b = d.group("CycleB", 4002, members=[a])
+    d.objects[a]["member"].append(b.encode())  # A contains B contains A
+    result = ad.user_groups("jdoe")
+    assert {"CycleA", "CycleB"} <= {m.obj.name for m in result.groups}
+    assert vias(result.groups)["CycleB"] == ["CycleA"]
+    members = ad.group_members("CycleA")
+    assert names(members.members)["CycleB"] == "direct" and names(members.members)["jdoe"] == "direct"
+
+
+def test_diamond_lists_every_parent(ad):
+    d = ad.directory
+    top = d.group("Top", 4101)
+    left = d.group("Left", 4102, members=["CN=jdoe,OU=Users,DC=corp,DC=example,DC=com"])
+    right = d.group("Right", 4103, members=["CN=jdoe,OU=Users,DC=corp,DC=example,DC=com"])
+    d.objects[top]["member"] = [left.encode(), right.encode()]
+    assert vias(ad.user_groups("jdoe").groups)["Top"] == ["Left", "Right"]
+
+
+def test_deep_and_wide_nesting_is_batched(ad):
+    d = ad.directory
+    jdoe = "CN=jdoe,OU=Users,DC=corp,DC=example,DC=com"
+    wide = [d.group(f"Wide{i:03}", 5000 + i, members=[jdoe]) for i in range(120)]
+    d.group("WideParent", 5999, members=wide)
+    chain = jdoe
+    for i in range(12):
+        chain = d.group(f"Deep{i:02}", 6000 + i, members=[chain])
+    before = len(d.queries)
+    result = ad.user_groups("jdoe")
+    found = {m.obj.name for m in result.groups}
+    assert {"WideParent", "Deep11"} <= found and len([n for n in found if n.startswith("Wide")]) == 121
+    assert vias(result.groups)["Deep11"] == ["Deep10"]
+    assert max(q.count("(distinguishedName=") for q in d.queries[before:]) <= 50  # BATCH_SIZE
+
+
+def test_members_include_primary_group_of_nested_groups(ad):
+    # Remote Access contains Domain Users, which is everyone's primary group.
+    result = ad.group_members("Remote Access")
+    rows = {m.obj.name: (m.via, m.parents) for m in result.members}
+    assert rows["Domain Users"] == ("direct", [])
+    assert rows["jdoe"] == ("nested", ["Domain Users"])
+    assert rows["asmith"] == ("nested", ["Domain Users"])
