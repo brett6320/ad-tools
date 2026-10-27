@@ -21,9 +21,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from .ad import CompareResult, DirectoryObject, GroupsResult, MembersResult
+from .ad import CompareResult, DirectoryObject, GroupsResult, Membership, MembersResult
 
 FORMATS = ("html", "json", "csv")
+
+YES, NO = "\u2713", "\u2717"  # check mark, ballot x
 
 GROUP_COLUMNS = ("name", "membership", "via groups", "scope", "kind", "mail", "description", "dn")
 MEMBER_COLUMNS = ("name", "type", "membership", "via groups", "disabled", "mail", "description", "dn")
@@ -35,6 +37,8 @@ class Section:
     columns: tuple[str, ...]
     rows: list[dict[str, Any]]
     note: str = ""
+    # Columns holding YES/NO marks; the HTML shows the row's "<column> membership" value as a tooltip.
+    checks: tuple[str, ...] = ()
 
 
 # Safety valve for pathological graphs; a subtree is never expanded twice, so real trees stay well under it.
@@ -211,18 +215,43 @@ def compare_report(result: CompareResult) -> Report:
         ("Nested groups included", "yes" if result.first.nested else "no"),
     ]
     common_columns = ("name", f"{a.name} via", f"{b.name} via", "scope", "kind", "description", "dn")
+    side = _side_by_side(result)
     return Report(
         "compare",
         f"Group comparison: {a.name} vs {b.name}",
         f"{a.name}_vs_{b.name}",
         summary,
         [
+            side,
             Section(f"Only {a.name}", GROUP_COLUMNS, only_a, f"Groups {b.name} is not in"),
             Section(f"Only {b.name}", GROUP_COLUMNS, only_b, f"Groups {a.name} is not in"),
             Section("In common", common_columns, common_rows),
         ],
         _now(),
     )
+
+
+def _how(m: Membership) -> str:
+    return f"nested via {', '.join(m.parents)}" if m.via == "nested" and m.parents else m.via
+
+
+def _side_by_side(result: CompareResult) -> Section:
+    """One row per group either user is in, with a mark column for each user."""
+    a, b = result.first.principal.name, result.second.principal.name
+    if a.lower() == b.lower():
+        a, b = f"{a} (1)", f"{b} (2)"
+    sides = ({m.obj.dn.lower(): m for m in result.first.groups}, {m.obj.dn.lower(): m for m in result.second.groups})
+    union = {**sides[1], **sides[0]}
+    rows = []
+    for key, m in sorted(union.items(), key=lambda kv: (kv[1].obj.name.lower(), kv[0])):
+        row: dict[str, Any] = {"group": m.obj.name}
+        for label, side in zip((a, b), sides, strict=True):
+            mine = side.get(key)
+            row[label] = YES if mine else NO
+            row[f"{label} membership"] = _how(mine) if mine else "not a member"
+        row["dn"] = m.obj.dn
+        rows.append(row)
+    return Section("Side by side", ("group", a, b), rows, f"{YES} member, {NO} not a member. Hover a mark for how.", (a, b))
 
 
 def search_report(filter_text: str, base: str, objects: list[DirectoryObject], attributes: list[str]) -> Report:
@@ -340,10 +369,10 @@ def _text(value: Any) -> str:
 
 _CSS = """
 :root{--bg:#ffffff;--fg:#1d2330;--muted:#5d6675;--line:#dde1e8;--head:#f3f5f8;--accent:#2457c5;
---direct:#e6f0ff;--nested:#f1ecfb;--primary:#e7f6ec;--warn:#b42318;--pop:#ffffff;--hover:#eef2f8;
+--direct:#e6f0ff;--nested:#f1ecfb;--primary:#e7f6ec;--warn:#b42318;--ok:#067647;--pop:#ffffff;--hover:#eef2f8;
 --shadow:0 8px 24px rgba(16,24,40,.16)}
 @media (prefers-color-scheme:dark){:root{--bg:#14171d;--fg:#e4e7ec;--muted:#98a2b3;--line:#2d333d;
---head:#1c2029;--accent:#7aa2ff;--direct:#1d2a44;--nested:#2a2240;--primary:#1b3326;--warn:#ff8a80;
+--head:#1c2029;--accent:#7aa2ff;--direct:#1d2a44;--nested:#2a2240;--primary:#1b3326;--warn:#ff8a80;--ok:#6ce9a6;
 --pop:#1c2029;--hover:#252b36;--shadow:0 8px 24px rgba(0,0,0,.5)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
@@ -376,6 +405,7 @@ td.dn{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size
 .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;white-space:nowrap}
 .pill.direct{background:var(--direct)}.pill.nested{background:var(--nested)}.pill.primary{background:var(--primary)}
 .yes{color:var(--warn);font-weight:600}
+td.ck{text-align:center;font-weight:700;cursor:help}td.ck.y{color:var(--ok)}td.ck.n{color:var(--warn)}
 .empty{padding:12px;color:var(--muted)}
 .xf-pop{position:absolute;z-index:10;width:280px;max-width:calc(100vw - 16px);background:var(--pop);
 border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:8px;font-size:13px}
@@ -553,7 +583,11 @@ def render_html(report: Report) -> str:
         )
         out.append("</tr></thead><tbody>")
         for row in section.rows:
-            out.append("<tr>" + "".join(_cell(c, row.get(c)) for c in section.columns) + "</tr>")
+            cells = (
+                _check_cell(row.get(c), row.get(f"{c} membership")) if c in section.checks else _cell(c, row.get(c))
+                for c in section.columns
+            )
+            out.append("<tr>" + "".join(cells) + "</tr>")
         out.append("</tbody></table></div>")
     out.append(f"</main><script>{_JS}</script></body></html>")
     return "\n".join(out)
@@ -577,6 +611,11 @@ def _tree_html(node: TreeNode, depth: int) -> str:
         return f'<li class="leaf">{label}</li>'
     children = "".join(_tree_html(c, depth + 1) for c in node.children)
     return f"<li><details{' open' if depth < 2 else ''}><summary>{label}</summary><ul>{children}</ul></details></li>"
+
+
+def _check_cell(value: Any, how: Any) -> str:
+    cls = "y" if value == YES else "n"
+    return f'<td class="ck {cls}" title="{escape(_text(how))}">{escape(_text(value))}</td>'
 
 
 def _cell(column: str, value: Any) -> str:

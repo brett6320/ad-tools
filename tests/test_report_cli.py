@@ -55,10 +55,34 @@ def test_members_and_compare_reports(fake):
     comparison = compare_report(fake.compare_users("jdoe", "asmith"))
     assert comparison.kind == "compare" and comparison.slug == "jdoe_vs_asmith"
     titles = [s.title for s in comparison.sections]
-    assert titles == ["Only jdoe", "Only asmith", "In common"]
-    assert "jdoe via" in comparison.sections[2].columns
+    assert titles == ["Side by side", "Only jdoe", "Only asmith", "In common"]
+    assert "jdoe via" in comparison.sections[3].columns
     html = render_html(comparison)
     assert "Only jdoe (0)" in html and "Only asmith (1)" in html and "In common (5)" in html
+
+
+def test_compare_side_by_side(fake):
+    side = compare_report(fake.compare_users("jdoe", "asmith")).sections[0]
+    assert side.columns == ("group", "jdoe", "asmith")
+    marks = {r["group"]: (r["jdoe"], r["asmith"]) for r in side.rows}
+    assert list(marks) == sorted(marks, key=str.lower)
+    assert marks["Finance"] == ("\u2717", "\u2713")
+    assert marks["Engineering"] == ("\u2713", "\u2713")
+    finance = next(r for r in side.rows if r["group"] == "Finance")
+    assert finance["jdoe membership"] == "not a member" and finance["asmith membership"] == "direct"
+    vpn = next(r for r in side.rows if r["group"] == "VPN Users")
+    assert vpn["asmith membership"] == "nested via Engineering"
+
+    html = render_html(compare_report(fake.compare_users("jdoe", "asmith")))
+    assert "Side by side (6)" in html
+    assert '<td class="ck n" title="not a member">\u2717</td><td class="ck y" title="direct">\u2713</td>' in html
+    assert "\u2713" in render_text(compare_report(fake.compare_users("jdoe", "asmith")))
+
+
+def test_compare_side_by_side_same_name(fake):
+    side = compare_report(fake.compare_users("jdoe", "jdoe")).sections[0]
+    assert side.columns == ("group", "jdoe (1)", "jdoe (2)")
+    assert all(r["jdoe (1)"] == r["jdoe (2)"] == "\u2713" for r in side.rows)
 
 
 def test_empty_section_html(fake):
