@@ -1,10 +1,11 @@
 # Usage
 
 Activate the virtual environment first (`source .venv/bin/activate`, or `.venv\Scripts\Activate.ps1` on
-Windows). Run commands as `ad-query <command> …`, or as `python -m adtools <command> …`.
+Windows). Run commands as `ad-query <command> …` (installed), `./ad-query <command> …` (from the
+checkout), or `python -m adtools <command> …`.
 
 Options go **after** the command (`ad-query groups jdoe --format json`). Every command takes the connection
-options (`--server`, `--domain`, `--base-dn`, `--bind-user`, `--bind-domain`, `--tls-mode`, `--gc`, `--port`, `--trust`,
+options (`--server`, `--site`, `--dns-server`, `--domain`, `--base-dn`, `--bind-user`, `--bind-domain`, `--tls-mode`, `--gc`, `--port`, `--trust`,
 `--ca-file`, `--timeout`, `--env-file`) and the output options below. For anything you don't pass, the
 value comes from the environment or `.env` (see [Setup](setup.md#5-configure-with-env)).
 

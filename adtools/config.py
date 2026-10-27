@@ -38,7 +38,7 @@ class ConfigError(ValueError):
 class Settings:
     """Connection settings. Each field maps to an ``AD_<FIELD>`` variable."""
 
-    server: str = ""  # one host or a comma-separated list, tried in order
+    server: str = ""  # one host or a comma-separated list, tried in order; empty = discover via DNS
     port: int = 0  # 0 = default for the TLS mode (636 LDAPS / 389 StartTLS, or 3269 / 3268 with gc)
     tls_mode: str = "ldaps"
     global_catalog: bool = False
@@ -54,10 +54,16 @@ class Settings:
     timeout: float = 10.0
     page_size: int = 500
     reports_dir: str = "reports"
+    site: str = ""  # AD site name: its DCs are tried first when discovering DCs
+    dns_server: str = ""  # name servers for DC discovery (comma-separated); empty = the system's
 
     @property
     def servers(self) -> list[str]:
         return [s.strip() for s in self.server.split(",") if s.strip()]
+
+    @property
+    def dns_servers(self) -> list[str]:
+        return [s.strip() for s in self.dns_server.split(",") if s.strip()]
 
     @property
     def effective_port(self) -> int:
@@ -97,8 +103,10 @@ class Settings:
         return f"{domain}\\{user}"
 
     def validate(self) -> Settings:
-        if not self.servers:
-            raise ConfigError("no server configured; set AD_SERVER or pass server=")
+        if not self.servers and not self.domain.strip():
+            raise ConfigError("set AD_SERVER, or AD_DOMAIN to find the domain controllers through DNS")
+        if any(c in self.site for c in "./\\ "):
+            raise ConfigError("AD_SITE must be an AD site name such as Default-First-Site-Name")
         if self.tls_mode not in TLS_MODES:
             raise ConfigError(f"AD_TLS_MODE must be one of {', '.join(TLS_MODES)}")
         if self.trust.lower() not in TRUST_MODES:

@@ -82,7 +82,12 @@ Check it worked:
 ```bash
 ad-query --version
 python -m adtools --help     # works too, with or without the console script
+./ad-query --version         # the executable launcher in the repository root; needs no install
 ```
+
+The `./ad-query` launcher (`#!/usr/bin/env python3`) runs the tools straight from the checkout, using
+whichever `python3` is first on your `PATH` (the venv's, once it's activated). On Windows, run
+`python ad-query …` instead.
 
 ## 5. Configure with `.env`
 
@@ -94,8 +99,10 @@ cp .env.example .env             # Windows: copy .env.example .env
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AD_SERVER` | (required) | DC host name, or a comma-separated list tried in order. Use names that match the certificates, not IP addresses |
-| `AD_DOMAIN` | | DNS domain (`corp.example.com`). Sets the search base to `DC=corp,DC=example,DC=com` when `AD_BASE_DN` is unset |
+| `AD_SERVER` | found via DNS | DC host name, or a comma-separated list tried in order. Use names that match the certificates, not IP addresses. Leave it unset to [find the DCs through DNS](#finding-domain-controllers-through-dns) |
+| `AD_DOMAIN` | | DNS domain (`corp.example.com`). Sets the search base to `DC=corp,DC=example,DC=com` when `AD_BASE_DN` is unset, and is the domain whose DCs are looked up when `AD_SERVER` is unset. You need at least one of the two |
+| `AD_SITE` | | With DNS discovery, an AD site whose DCs are tried first (for example `HQ`) |
+| `AD_DNS_SERVER` | the system's | With DNS discovery, name server IP(s) to query (comma-separated) instead of the system's |
 | `AD_BASE_DN` | from `AD_DOMAIN` | Search base, for example a single OU |
 | `AD_TLS_MODE` | `ldaps` | `ldaps` (implicit TLS) or `starttls` (upgrade a 389 connection) |
 | `AD_PORT` | by mode | `636` / `389`, or `3269` / `3268` with the global catalog |
@@ -125,6 +132,39 @@ You can keep several environments as separate files and pick one per run:
 ad-query groups jdoe --env-file ~/.config/ad-tools/prod.env   # options go after the command
 AD_ENV_FILE=lab.env ad-query members "Domain Admins"
 ```
+
+### Finding domain controllers through DNS
+
+When `AD_SERVER` is unset, the domain controllers for `AD_DOMAIN` are looked up in DNS. You don't need a
+list of DCs, and the lookup follows DC changes on its own.
+
+1. If `AD_SITE` is set, `_ldap._tcp.<site>._sites.dc._msdcs.<domain>` is looked up first, to get the DCs in
+   that site.
+2. Then `_ldap._tcp.dc._msdcs.<domain>`, for every DC in the domain. With `--gc` / `AD_GLOBAL_CATALOG=true`,
+   it's `_gc._tcp.<site>._sites.<domain>` and `_gc._tcp.<domain>` instead.
+3. The DCs are tried in SRV order: lowest priority first, weighted at random within a priority. That spreads
+   the load the way AD intends. The SRV port (389) is ignored, and the TLS port (636 / 3269, or `AD_PORT`)
+   is used instead.
+4. If nothing is found, the tools connect to the domain name itself (`corp.example.com`). AD publishes an
+   A record for every DC there, and DC certificates include the domain name.
+
+**Which name servers are asked:** `AD_DNS_SERVER` if it's set. Otherwise the system's:
+
+| Platform | Source |
+|---|---|
+| macOS | `scutil --dns`. Resolvers scoped to your AD domain (a VPN's split DNS, for example) are asked first, then the default resolvers |
+| Linux / BSD | `nameserver` lines in `/etc/resolv.conf` |
+| Windows | The TCP/IP settings in the registry, for each interface (static and DHCP) |
+
+The lookup uses only the standard library: a small DNS client over UDP that switches to TCP when a
+response is truncated.
+
+**Safety:** plain DNS isn't authenticated, so a DC name is only accepted if it's inside `AD_DOMAIN`
+(`dc1.corp.example.com` for `corp.example.com`). Any other name is skipped and logged. That stops a spoofed
+response from steering your password to an unrelated host that happens to have a publicly trusted
+certificate. The certificate is still checked against the DC's name as usual.
+
+Run with `-v` to see the DCs that were found, in the order they're tried.
 
 ### Choosing the bind account
 
@@ -186,6 +226,8 @@ text summary. If it fails:
 | Error | Likely cause |
 |---|---|
 | `could not connect to any server: … timed out` | Firewall, wrong host, or wrong port. Test with `nc -vz dc1.corp.example.com 636` (or `Test-NetConnection dc1 -Port 636` in PowerShell) |
+| `no DC SRV records found for corp.example.com` (with `-v`) | Your resolver can't see AD's DNS zone (off VPN, or public DNS). Set `AD_DNS_SERVER` to a DC's IP, or list the DCs in `AD_SERVER`. Check with `nslookup -type=SRV _ldap._tcp.dc._msdcs.corp.example.com` |
+| `ignoring DC … it is outside corp.example.com` | An SRV record points outside the domain. This is expected for some multi-domain setups: put those DCs in `AD_SERVER` |
 | `certificate verify failed: unable to get local issuer certificate` | The DC's CA isn't trusted. See [TLS: fixing certificate errors](tls.md#fixing-certificate-errors) |
 | `certificate verify failed: Hostname mismatch` | `AD_SERVER` doesn't match the certificate. Use the DC's FQDN, not an IP address or alias |
 | `bind failed: invalidCredentials … data 52e` | Wrong user name or password (`data 775` = locked out, `533` = disabled, `701`/`532` = expired) |
