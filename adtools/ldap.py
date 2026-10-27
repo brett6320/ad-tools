@@ -58,6 +58,8 @@ RESULT_CODES = {
 
 TLS_MODES = ("ldaps", "starttls")
 
+_OP_NAMES = {BIND_REQUEST: "bind", SEARCH_REQUEST: "search", EXTENDED_REQUEST: "StartTLS"}
+
 
 class LDAPError(Exception):
     """An LDAP operation failed."""
@@ -113,6 +115,7 @@ class LDAPConnection:
         self._sock = sock
         self._buffer = b""
         self._message_id = 0
+        self._operations: dict[int, str] = {}
         self._encrypted = sock is not None
 
     # --- connection lifecycle --------------------------------------------
@@ -266,6 +269,13 @@ class LDAPConnection:
             result = _parse_result(body)
             if result.code == 4 and size_limit and returned >= size_limit:
                 return
+            if result.code == 3:
+                raise LDAPError(
+                    f"search failed: the DC stopped the query at its {time_limit}s time limit (timeLimitExceeded); "
+                    "raise AD_TIMEOUT or narrow the search",
+                    result.code,
+                    result.diagnostic,
+                )
             if result.code != 0:
                 raise LDAPError(f"search failed: {result.name} {result.diagnostic}".strip(), result.code, result.diagnostic)
             log.debug("< search #%s done: %s, %s entries", msg_id, result.name, page_entries)
@@ -279,6 +289,7 @@ class LDAPConnection:
         if self._sock is None:
             raise LDAPError("connection is not open")
         self._message_id += 1
+        self._operations[self._message_id] = _OP_NAMES.get(op[0], f"operation 0x{op[0]:02x}")
         message = ber.sequence(ber.integer(self._message_id), op, controls or b"")
         self._sock.sendall(message)
         return self._message_id
@@ -286,7 +297,13 @@ class LDAPConnection:
     def _receive(self, msg_id: int) -> tuple[int, bytes, list[ber.TLV]]:
         """Return ``(op_tag, op_body, controls)`` of the next message for ``msg_id``."""
         while True:
-            message = self._read_message()
+            try:
+                message = self._read_message()
+            except TimeoutError:
+                raise LDAPError(
+                    f"no response from {self.host}:{self.port} within {self.timeout:g}s "
+                    f"(waiting for {self._operations.get(msg_id, 'a response')} #{msg_id})"
+                ) from None
             parts = message.children()
             if len(parts) < 2 or parts[0].tag != ber.INTEGER:
                 raise LDAPError("malformed LDAP message")

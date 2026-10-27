@@ -22,8 +22,15 @@ from .tls import build_ssl_context
 
 log = logging.getLogger(__name__)
 
-# LDAP_MATCHING_RULE_IN_CHAIN: walks the member/memberOf chain transitively on the DC.
+# LDAP_MATCHING_RULE_IN_CHAIN walks the member/memberOf chain on the DC. It is not used for membership
+# lookups: on large domains it can run for minutes before returning anything. Nesting is expanded
+# client-side instead, one level at a time, with batched queries on indexed attributes.
 IN_CHAIN = "1.2.840.113556.1.4.1941"
+
+# Clauses per OR filter when expanding nesting; keeps each request small.
+BATCH_SIZE = 50
+# Nesting depth guard (AD itself has no limit; real directories rarely exceed 10).
+MAX_NESTING_DEPTH = 100
 
 UF_ACCOUNTDISABLE = 0x2
 
@@ -184,6 +191,7 @@ class Membership:
     obj: DirectoryObject
     direct: bool
     primary: bool = False
+    parents: list[str] = field(default_factory=list)  # nested only: the group(s) it is reached through
 
     @property
     def via(self) -> str:
@@ -198,6 +206,7 @@ class Membership:
             "cn": o.get("cn"),
             "type": o.object_class,
             "membership": self.via,
+            "via groups": "; ".join(self.parents),
             "mail": o.get("mail"),
             "description": o.get("description"),
             "dn": o.dn,
@@ -375,8 +384,17 @@ class ADClient:
         size_limit: int = 0,
     ) -> Iterator[DirectoryObject]:
         base = self.settings.search_base if base is None else base
+        # Ask the DC to give up just before the client would, so a slow query ends with a clear
+        # timeLimitExceeded instead of a silent socket timeout.
+        time_limit = max(1, int(self.settings.timeout) - 1) if self.settings.timeout >= 2 else 0
         for entry in self.connection.search(
-            base, search_filter, attributes, scope=scope, size_limit=size_limit, page_size=self.settings.page_size
+            base,
+            search_filter,
+            attributes,
+            scope=scope,
+            size_limit=size_limit,
+            time_limit=time_limit,
+            page_size=self.settings.page_size,
         ):
             yield DirectoryObject.from_entry(entry)
 
@@ -425,50 +443,121 @@ class ADClient:
             return None
         domain_sid = sid.rsplit("-", 1)[0]
         value = escape_filter_value(sid_to_bytes(f"{domain_sid}-{int(rid)}"))
-        found = list(self.search(f"(&(objectClass=group)(objectSid={value}))", GROUP_ATTRS))
+        found = list(self.search(f"(&(objectClass=group)(objectSid={value}))", (*GROUP_ATTRS, "memberOf")))
         return found[0] if found else None
+
+    def _groups_by_dn(self, dns: list[str]) -> Iterator[DirectoryObject]:
+        for chunk in _batched(dns):
+            clauses = "".join(f"(distinguishedName={escape_filter_value(dn)})" for dn in chunk)
+            yield from self.search(f"(&(objectClass=group)(|{clauses}))", (*GROUP_ATTRS, "memberOf"))
 
     # memberships
 
     def user_groups(self, identity: str, nested: bool = True) -> GroupsResult:
-        """Groups a user is a member of: direct, nested (transitive) and the primary group."""
+        """Groups a user is a member of: direct, nested (transitive) and the primary group.
+
+        Nesting is followed upward through each group's ``memberOf``, one level per
+        round trip, so every nested group records the group(s) it is reached through.
+        """
         principal = self.find_principal(identity)
         dn = escape_filter_value(principal.dn)
-        direct = {g.dn.lower(): g for g in self.search(f"(&(objectClass=group)(member={dn}))", GROUP_ATTRS)}
+        found: dict[str, Membership] = {}
+        for g in self.search(f"(&(objectClass=group)(member={dn}))", (*GROUP_ATTRS, "memberOf")):
+            found[g.dn.lower()] = Membership(g, direct=True)
         primary = self._primary_group(principal)
-        groups = [Membership(g, direct=True) for g in direct.values()]
-        if primary is not None and primary.dn.lower() not in direct:
-            groups.append(Membership(primary, direct=True, primary=True))
-        if nested:
-            seen = {m.obj.dn.lower() for m in groups}
-            chains = [f"(member:{IN_CHAIN}:={dn})"]
-            if primary is not None:
-                chains.append(f"(member:{IN_CHAIN}:={escape_filter_value(primary.dn)})")
-            for g in self.search(f"(&(objectClass=group)(|{''.join(chains)}))", GROUP_ATTRS):
-                if g.dn.lower() not in seen:
-                    seen.add(g.dn.lower())
-                    groups.append(Membership(g, direct=False))
-        groups.sort(key=_sort_key)
+        if primary is not None and primary.dn.lower() not in found:
+            found[primary.dn.lower()] = Membership(primary, direct=True, primary=True)
+        frontier = list(found.values())
+        depth = 0
+        while nested and frontier and depth < MAX_NESTING_DEPTH:
+            depth += 1
+            wanted: dict[str, tuple[str, list[str]]] = {}
+            for child in frontier:
+                for parent_dn in child.obj.get_all("memberOf"):
+                    key = parent_dn.lower()
+                    if key in found:
+                        _add_parent(found[key], child.obj.name)
+                    else:
+                        wanted.setdefault(key, (parent_dn, []))[1].append(child.obj.name)
+            frontier = []
+            for g in self._groups_by_dn([dn for dn, _ in wanted.values()]):
+                key = g.dn.lower()
+                if key not in found:
+                    found[key] = Membership(g, direct=False, parents=sorted(set(wanted.get(key, ("", []))[1])))
+                    frontier.append(found[key])
+        if frontier and depth >= MAX_NESTING_DEPTH:
+            log.warning("stopped expanding nested groups at depth %s", MAX_NESTING_DEPTH)
+        groups = sorted(found.values(), key=_sort_key)
         return GroupsResult(principal, groups, nested)
 
     def group_members(self, identity: str, nested: bool = True) -> MembersResult:
-        """Members of a group: direct, nested (transitive) and accounts using it as their primary group."""
+        """Members of a group: direct, nested (transitive) and accounts using a group as their primary group.
+
+        Nesting is followed downward with batched ``memberOf`` queries, one level per
+        round trip, so every nested member records the group(s) it is reached through.
+        """
         group = self.find_group(identity)
-        dn = escape_filter_value(group.dn)
-        members = {m.dn.lower(): Membership(m, direct=True) for m in self.search(f"(memberOf={dn})", PRINCIPAL_ATTRS)}
-        sid = group.get("objectSid")
-        if sid and str(sid).startswith("S-"):
-            rid = int(str(sid).rsplit("-", 1)[1])
-            for m in self.search(f"(primaryGroupID={rid})", PRINCIPAL_ATTRS):
+        attrs = (*PRINCIPAL_ATTRS, "memberOf")
+        members: dict[str, Membership] = {}
+        for m in self.search(f"(memberOf={escape_filter_value(group.dn)})", attrs):
+            members[m.dn.lower()] = Membership(m, direct=True)
+        rid = _rid(group)
+        if rid is not None:
+            for m in self.search(f"(primaryGroupID={rid})", attrs):
                 members.setdefault(m.dn.lower(), Membership(m, direct=True, primary=True))
-        if nested:
-            for m in self.search(f"(memberOf:{IN_CHAIN}:={dn})", PRINCIPAL_ATTRS):
-                members.setdefault(m.dn.lower(), Membership(m, direct=False))
+        frontier = [m for m in members.values() if m.obj.object_class == "group"]
+        seen_groups = {group.dn.lower()} | {m.obj.dn.lower() for m in frontier}
+        depth = 0
+        while nested and frontier and depth < MAX_NESTING_DEPTH:
+            depth += 1
+            names = {m.obj.dn.lower(): m.obj.name for m in frontier}
+            next_frontier: list[Membership] = []
+
+            def record(obj: DirectoryObject, parents: list[str], next_frontier: list[Membership] = next_frontier) -> None:
+                key = obj.dn.lower()
+                if key in members:
+                    for p in parents:
+                        _add_parent(members[key], p)
+                    return
+                members[key] = Membership(obj, direct=False, parents=sorted(set(parents)))
+                if obj.object_class == "group" and key not in seen_groups:
+                    seen_groups.add(key)
+                    next_frontier.append(members[key])
+
+            for chunk in _batched(list(names)):
+                clauses = "".join(f"(memberOf={escape_filter_value(m.obj.dn)})" for m in frontier if m.obj.dn.lower() in chunk)
+                for obj in self.search(f"(|{clauses})", attrs):
+                    record(obj, [names[p.lower()] for p in obj.get_all("memberOf") if p.lower() in names])
+            rids = {r: m.obj.name for m in frontier if (r := _rid(m.obj)) is not None}
+            for chunk in _batched(sorted(rids)):
+                clauses = "".join(f"(primaryGroupID={r})" for r in chunk)
+                for obj in self.search(f"(|{clauses})", attrs):
+                    pgid = int(obj.get("primaryGroupID") or 0)
+                    record(obj, [rids[pgid]] if pgid in rids else [])
+            frontier = next_frontier
+        if frontier and depth >= MAX_NESTING_DEPTH:
+            log.warning("stopped expanding nested members at depth %s", MAX_NESTING_DEPTH)
         ordered = sorted(members.values(), key=_sort_key)
         return MembersResult(group, ordered, nested)
 
     def compare_users(self, first: str, second: str, nested: bool = True) -> CompareResult:
         return CompareResult(self.user_groups(first, nested), self.user_groups(second, nested))
+
+
+def _batched(items: list[str], size: int = BATCH_SIZE) -> Iterator[list[str]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _add_parent(membership: Membership, parent: str) -> None:
+    if not membership.direct and parent not in membership.parents:
+        membership.parents.append(parent)
+        membership.parents.sort()
+
+
+def _rid(obj: DirectoryObject) -> int | None:
+    sid = str(obj.get("objectSid") or "")
+    return int(sid.rsplit("-", 1)[1]) if sid.startswith("S-") else None
 
 
 def _sort_key(m: Membership) -> tuple[int, str]:

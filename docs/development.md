@@ -35,7 +35,7 @@ No real directory is needed:
 | `tests/test_config.py` | `.env` parsing, discovery and precedence, rejection of `AD_PASSWORD`, and how the bind name is built from `AD_BIND_DOMAIN` |
 | `tests/test_dns.py` | DC discovery: DNS wire format (name compression, loops, truncation), a local UDP/TCP DNS server, SRV ordering, site-first lookup, rejection of DCs outside the domain, the fallback to the domain name, and name server discovery from `resolv.conf` / `scutil` |
 | `tests/test_entrypoints.py` | Every tracked script with a `#!` line has the execute bit in git, and `./ad-query` and `python -m adtools` both run |
-| `tests/test_ad.py` | User/group lookups, direct, nested and primary-group membership, and comparisons, run against `tests/fakedir.py`. That in-memory directory evaluates the compiled BER filters, including `LDAP_MATCHING_RULE_IN_CHAIN` |
+| `tests/test_ad.py` | User/group lookups, direct, nested and primary-group membership, and comparisons, run against `tests/fakedir.py`. That in-memory directory evaluates the compiled BER filters. Also covers level-by-level nesting with the "via" paths, loops, diamonds, batching, and a guard that no in-chain queries are sent |
 | `tests/test_report_cli.py` | HTML/JSON/CSV output (escaping, CSV formula neutralization), the CLI end to end, failover and password prompting |
 
 `tests/conftest.py` clears `AD_*` variables and points `AD_ENV_FILE` at an empty file, so your own `.env`

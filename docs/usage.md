@@ -80,9 +80,9 @@ Each group is listed with its membership:
 - **direct**: the user is in the group's `member` attribute.
 - **primary group**: the user's `primaryGroupID` (usually *Domain Users*). AD doesn't record this in
   `member`/`memberOf`, so most tools miss it. Here it's resolved from the user's SID.
-- **nested**: membership through other groups, at any depth. The domain controller works this out with
-  `LDAP_MATCHING_RULE_IN_CHAIN` (`1.2.840.113556.1.4.1941`), which also covers groups the primary group
-  is nested in.
+- **nested**: membership through other groups, at any depth, including groups the primary group is nested
+  in. The **via groups** column names the group(s) each one is reached through, for example *All Staff*
+  via *Engineering*. A group reached by more than one route lists every parent.
 
 `--direct-only` lists the direct groups and the primary group only. The table also shows each group's
 scope (Global / Domain local / Universal), its type (Security / Distribution), email and description.
@@ -99,13 +99,40 @@ Lists users, groups, computers, contacts and foreign security principals:
 
 - **direct**: listed in the group's `member` attribute (including nested groups themselves).
 - **primary group**: accounts whose `primaryGroupID` is this group (for example everyone in *Domain Users*).
-- **nested**: members of member groups, at any depth.
+- **nested**: members of member groups at any depth, including accounts whose primary group is one of
+  those nested groups. **via groups** names the member group(s) each one comes through.
 
 The summary counts direct, nested-only, users, groups and total. Disabled user and computer accounts are
 flagged in the `disabled` column.
 
 Large groups are fine: members are found by searching `memberOf` with paged results, rather than reading
 the group's `member` attribute. That avoids AD's 1,500-value range limit on the attribute.
+
+### How nesting is resolved
+
+Nested membership is worked out on the client, one level of nesting at a time:
+
+- `groups` follows each group's `memberOf` upward and fetches the parents by `distinguishedName`.
+- `members` follows `memberOf` downward with batched `(|(memberOf=…)(memberOf=…))` searches.
+
+Every query is on an indexed attribute, with up to 50 groups per request, so each one returns quickly. The
+number of round trips depends on how deep the nesting goes, not on how big the domain is. Membership loops
+(A contains B contains A) are detected, and expansion stops at a depth of 100.
+
+AD's `LDAP_MATCHING_RULE_IN_CHAIN` (`1.2.840.113556.1.4.1941`) is deliberately **not** used. On large
+domains a single in-chain query can run for minutes before sending anything back, and then time out. You
+can still use it in `ad-query search` if you want to.
+
+## Timeouts
+
+`AD_TIMEOUT` (default 10s) applies to connecting and to each response. Every search also asks the DC to
+stop 1 second before that (the LDAP `timeLimit`), so a slow query ends with a clear message instead of a
+dropped connection:
+
+| Message | Meaning |
+|---|---|
+| `the DC stopped the query at its 89s time limit (timeLimitExceeded)` | The DC worked on the query for the whole time limit. Raise `AD_TIMEOUT`, or narrow the search with `--base` or a more specific filter. AD caps queries at its own `MaxQueryDuration` (120s by default) |
+| `no response from dc1:636 within 90s (waiting for search #5)` | Nothing came back at all, for example because of a network drop or an overloaded DC. `--debug` shows the request that was sent |
 
 ## `compare`: how do two users' groups differ?
 

@@ -163,3 +163,21 @@ def test_debug_trace_of_search(caplog):
     assert "< search #2 done: success, 2 entries" in caplog.text
     assert "hunter2" not in caplog.text
     assert conn.tls_version == ""  # a plain test socket has no TLS
+
+
+def test_timeout_names_the_operation():
+    server, conn = connect(lambda tag, op, c: [(bind_ok(), None)] if tag == BIND_REQUEST else [])
+    conn.timeout = 0.2
+    server.client.settimeout(0.2)
+    conn.bind("u", "p")
+    with pytest.raises(LDAPError, match=r"no response from dc\.test:636 within 0\.2s \(waiting for search #2\)"):
+        list(conn.search("DC=x"))
+
+
+def test_server_time_limit_is_sent_and_reported():
+    server, conn = connect(lambda tag, op, c: [(done(3), None)])
+    with pytest.raises(LDAPError, match="89s time limit") as excinfo:
+        list(conn.search("DC=x", time_limit=89))
+    assert excinfo.value.code == 3
+    time_limit = server.requests[0][1].children()[4]
+    assert ber.to_int(time_limit.value) == 89
