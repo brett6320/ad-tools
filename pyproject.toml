@@ -34,6 +34,7 @@ omit = ["adtools/__main__.py"]
 [tool.ruff]
 line-length = 130
 target-version = "py311"
+extend-exclude = [".github/scripts"]  # shared verbatim with aws-net-tools
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "A", "C4", "SIM", "RUF"]

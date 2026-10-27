@@ -43,7 +43,7 @@ never leaks into the tests.
 
 | Workflow | Runs |
 |---|---|
-| `tests.yml` | pytest with coverage on Ubuntu, macOS and Windows × Python 3.11, 3.12 and 3.13; a run without `truststore` (standard library only); and a smoke test that does `pip install .` and runs `ad-query` |
+| `tests.yml` | pytest with coverage on Ubuntu, macOS and Windows × Python 3.11, 3.12 and 3.13; a run without `truststore` (standard library only); and a smoke test that does `pip install .` and runs `ad-query`. Each job writes a results table to the job summary. On `main`, the Ubuntu / Python 3.13 numbers are published to the `badges` branch (`.github/scripts/test_report.py`), which is where the README's test-count and coverage badges come from |
 | `lint.yml` | ruff check and format, bandit, pip-audit. Also runs weekly |
 | `codeql.yml` | CodeQL `security-extended` analysis of the Python code. Runs on pushes, PRs and weekly |
 | `dependabot.yml` | Weekly update PRs for pip packages and GitHub Actions |
