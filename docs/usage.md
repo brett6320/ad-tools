@@ -193,11 +193,14 @@ ad-query compare john.doe@corp.example.com alice@corp.example.com
 ad-query compare jdoe asmith --direct-only
 ```
 
-The report has three tables:
+The report has four tables:
 
-1. **Only USER1**: groups the first user is in and the second isn't. Useful for "give B the same access as A".
-2. **Only USER2**: the reverse.
-3. **In common**: groups both are in, with a column for each user showing how they're a member. A group can
+1. **Side by side**: every group either user is in, one row each, with a column per user: ✓ for a member,
+   ✗ for not. Hover a mark to see how (*direct*, *nested via Engineering*, *primary group*). Filter a user's
+   column to ✗ to list what they're missing.
+2. **Only USER1**: groups the first user is in and the second isn't. Useful for "give B the same access as A".
+3. **Only USER2**: the reverse.
+4. **In common**: groups both are in, with a column for each user showing how they're a member. A group can
    be *direct* for one user and *nested* for the other.
 
 Nested groups are included by default, so the comparison reflects effective group membership.
