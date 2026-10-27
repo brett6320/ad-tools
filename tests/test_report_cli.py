@@ -110,19 +110,19 @@ def cli_env(monkeypatch, tmp_path, fake):
 
 def test_cli_groups_default_html(cli_env, capsys):
     assert cli.main(["groups", "john.doe@corp.example.com"]) == 0
-    out = capsys.readouterr().out.strip()
+    out = capsys.readouterr().out.strip().replace("\\", "/")  # Windows prints native separators
     assert out.startswith("reports/user-groups/") and out.endswith("_jdoe.html")
     assert (cli_env / out).is_file()
 
 
 def test_cli_members_compare_search(cli_env, capsys):
     assert cli.main(["members", "VPN Users", "--direct-only", "--format", "json,csv", "--stdout"]) == 0
-    out = capsys.readouterr().out
+    out = capsys.readouterr().out.replace("\\", "/")
     assert "group-members/" in out and ".json" in out and ".csv" in out and "Members of VPN Users" in out
     assert cli.main(["compare", "jdoe", "asmith", "--reports-dir", "out"]) == 0
-    assert "out/compare/" in capsys.readouterr().out
+    assert "out/compare/" in capsys.readouterr().out.replace("\\", "/")
     assert cli.main(["search", "(objectClass=group)", "--attrs", "*"]) == 0
-    assert "reports/search/" in capsys.readouterr().out
+    assert "reports/search/" in capsys.readouterr().out.replace("\\", "/")
 
 
 def test_cli_errors(cli_env, capsys, caplog):

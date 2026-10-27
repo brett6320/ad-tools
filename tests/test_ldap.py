@@ -1,3 +1,5 @@
+import socket
+
 import pytest
 
 from adtools import ber
@@ -127,7 +129,7 @@ def test_notice_of_disconnection():
 
 def test_connection_closed_by_server():
     server, conn = connect(lambda tag, op, c: [])
-    server._server.close()
+    server._server.shutdown(socket.SHUT_RDWR)  # close() alone doesn't wake the server thread's recv on Linux
     with pytest.raises(LDAPError, match="closed"):
         conn._receive(1)
 
