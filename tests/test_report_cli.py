@@ -243,3 +243,31 @@ def test_anonymous_bind_does_not_prompt(monkeypatch):
 
     with ad_module.ADClient(server="up", domain="x.com", ssl_context=object(), password_prompt=never):
         assert FakeConn.binds[-1] == ("", "")
+
+
+def test_client_binds_with_domain_prefix_and_posix_user(monkeypatch):
+    from adtools import config
+
+    monkeypatch.setattr(ad_module, "LDAPConnection", FakeConn)
+    monkeypatch.setattr(config.getpass, "getuser", lambda: "jdoe")
+    asked = []
+    client = ad_module.ADClient(
+        server="up", domain="x.com", bind_domain="CORP", ssl_context=object(), password_prompt=lambda p: asked.append(p) or "pw"
+    )
+    with client:
+        assert FakeConn.binds[-1] == ("CORP\\jdoe", "pw")
+    assert asked == ["Password for CORP\\jdoe: "]
+
+
+def test_cli_bind_domain_flag(cli_env, monkeypatch):
+    seen = {}
+    real = cli.ADClient
+
+    def capture(settings):
+        seen["user"] = settings.effective_bind_user
+        return real(settings)
+
+    monkeypatch.setattr(cli, "ADClient", capture)
+    (cli_env / ".env").write_text("AD_SERVER=dc.test\nAD_DOMAIN=corp.example.com\n")
+    assert cli.main(["groups", "jdoe", "--bind-domain", "CORP", "--bind-user", "alice"]) == 0
+    assert seen["user"] == "CORP\\alice"

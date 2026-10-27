@@ -38,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     conn.add_argument("--domain", help="DNS domain, used to derive the base DN (AD_DOMAIN)")
     conn.add_argument("--base-dn", help="search base (AD_BASE_DN)")
     conn.add_argument("--bind-user", help="UPN, DOMAIN\\user or DN to bind as (AD_BIND_USER)")
+    conn.add_argument(
+        "--bind-domain", help="NetBIOS domain prefix; binds as DOMAIN\\<bind user or local login name> (AD_BIND_DOMAIN)"
+    )
     conn.add_argument("--trust", choices=TRUST_MODES, help="certificate trust source (AD_TRUST)")
     conn.add_argument("--ca-file", help="PEM CA bundle; implies --trust bundle under auto (AD_CA_FILE)")
     conn.add_argument("--timeout", type=float, help="connect/read timeout in seconds (AD_TIMEOUT)")
@@ -102,6 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             domain=args.domain,
             base_dn=args.base_dn,
             bind_user=args.bind_user,
+            bind_domain=args.bind_domain,
             trust=args.trust,
             ca_file=args.ca_file,
             timeout=args.timeout,

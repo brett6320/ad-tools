@@ -101,6 +101,7 @@ cp .env.example .env             # Windows: copy .env.example .env
 | `AD_PORT` | by mode | `636` / `389`, or `3269` / `3268` with the global catalog |
 | `AD_GLOBAL_CATALOG` | `false` | Query the forest-wide global catalog. With no base DN set, searches the whole forest |
 | `AD_BIND_USER` | (anonymous) | `user@corp.example.com` (UPN), `CORP\user`, or a full DN |
+| `AD_BIND_DOMAIN` | | NetBIOS domain prefix, used instead of a fixed `AD_BIND_USER`: you bind as `CORP\<your POSIX login name>`. A bare `AD_BIND_USER` (`jdoe`) also gets the prefix. See [Choosing the bind account](#choosing-the-bind-account) |
 | `AD_TRUST` | `auto` | `auto`, `truststore`, `system` or `bundle`. See [TLS](tls.md) |
 | `AD_CA_FILE` / `AD_CA_PATH` | | PEM CA bundle, or a directory of hashed certificates, for the `bundle` mode |
 | `AD_CLIENT_CERT` / `AD_CLIENT_KEY` | | Optional client certificate for mutual TLS |
@@ -125,6 +126,36 @@ ad-query groups jdoe --env-file ~/.config/ad-tools/prod.env   # options go after
 AD_ENV_FILE=lab.env ad-query members "Domain Admins"
 ```
 
+### Choosing the bind account
+
+Pick one:
+
+```dotenv
+# A specific account, the same for everyone who uses this .env:
+AD_BIND_USER=svc-ldap-ro@corp.example.com
+
+# Or each person's own login. Leave AD_BIND_USER unset and set the domain prefix:
+AD_BIND_DOMAIN=CORP
+```
+
+With `AD_BIND_DOMAIN`, the tools bind as `CORP\<login>`. `<login>` is your local POSIX user name, from
+`$LOGNAME` or `$USER` (`%USERNAME%` on Windows), with the account database as a fallback. That only works
+if your workstation login matches your AD sAMAccountName, which is typical on domain-joined and
+SSSD/AD-integrated machines.
+
+How the two interact:
+
+| `AD_BIND_USER` | `AD_BIND_DOMAIN` | Binds as |
+|---|---|---|
+| unset | `CORP` | `CORP\<login>` |
+| `alice` | `CORP` | `CORP\alice` (a bare name gets the prefix) |
+| `alice@corp.example.com`, `OTHER\alice` or a DN | `CORP` | Used exactly as given |
+| unset | unset | Anonymous (on AD this can only read the rootDSE) |
+
+One `.env` can therefore serve a whole team, with a per-run override (`--bind-user alice`, or
+`--bind-domain` / `--bind-user` on any command). Use the NetBIOS name (`CORP`), not the DNS name. If you're
+not sure what it is, it's the part before the `\` in `whoami` on a domain-joined Windows PC.
+
 ### Passwords
 
 **Passwords are never stored.** No setting holds a password. You are prompted for it (without it being
@@ -132,7 +163,7 @@ shown on screen) whenever a connection is made:
 
 ```
 $ ad-query groups jdoe
-Password for svc-ldap-ro@corp.example.com:
+Password for CORP\jdoe:
 reports/user-groups/20261027-142233_jdoe.html
 ```
 

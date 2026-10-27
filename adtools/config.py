@@ -12,6 +12,7 @@ Passwords are deliberately not a setting: ``AD_PASSWORD`` in the environment or 
 
 from __future__ import annotations
 
+import getpass
 import os
 import re
 from collections.abc import Mapping
@@ -43,7 +44,8 @@ class Settings:
     global_catalog: bool = False
     domain: str = ""  # DNS domain, e.g. corp.example.com; derives base_dn when that is unset
     base_dn: str = ""
-    bind_user: str = ""  # DN, UPN (user@corp.example.com) or CORP\\user; empty = anonymous
+    bind_user: str = ""  # DN, UPN (user@corp.example.com) or CORP\\user; empty = bind_domain or anonymous
+    bind_domain: str = ""  # NetBIOS domain prefix: binds as CORP\\<bind_user or local login name>
     trust: str = "auto"
     ca_file: str = ""
     ca_path: str = ""
@@ -75,6 +77,25 @@ class Settings:
             return ""  # the GC root covers the whole forest
         raise ConfigError("set AD_BASE_DN or AD_DOMAIN")
 
+    @property
+    def effective_bind_user(self) -> str:
+        """The name to bind as, or "" for an anonymous bind.
+
+        ``bind_user`` is used as given when it is already qualified (DN, UPN or
+        DOMAIN\\user). Otherwise, with ``bind_domain`` set, the bare name (or, when
+        ``bind_user`` is empty, the local POSIX login name) is prefixed: ``CORP\\jdoe``.
+        """
+        user = self.bind_user.strip()
+        domain = self.bind_domain.strip().rstrip("\\")
+        if not domain or any(c in user for c in "\\@="):
+            return user
+        if not user:
+            try:
+                user = getpass.getuser()
+            except (OSError, KeyError, ImportError) as exc:
+                raise ConfigError(f"AD_BIND_DOMAIN is set but the local user name is unknown: {exc}") from None
+        return f"{domain}\\{user}"
+
     def validate(self) -> Settings:
         if not self.servers:
             raise ConfigError("no server configured; set AD_SERVER or pass server=")
@@ -88,6 +109,8 @@ class Settings:
             raise ConfigError("AD_TIMEOUT must be positive")
         if self.page_size < 0:
             raise ConfigError("AD_PAGE_SIZE must not be negative")
+        if any(c in self.bind_domain.strip().rstrip("\\") for c in "\\@=,/ "):
+            raise ConfigError("AD_BIND_DOMAIN must be a NetBIOS domain name such as CORP")
         return self
 
 

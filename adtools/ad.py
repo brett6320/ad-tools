@@ -285,14 +285,15 @@ class ADClient:
             return self
         s = self.settings
         ctx = self._ssl_context or build_ssl_context(s.trust, s.ca_file, s.ca_path, s.client_cert, s.client_key)
-        password = self._prompt_password() if s.bind_user else ""
+        user = s.effective_bind_user
+        password = self._prompt_password(user) if user else ""
         try:
-            return self._connect_any(ctx, password)
+            return self._connect_any(ctx, user, password)
         finally:
             del password
 
-    def _prompt_password(self) -> str:
-        prompt = f"Password for {self.settings.bind_user}: "
+    def _prompt_password(self, user: str) -> str:
+        prompt = f"Password for {user}: "
         if self._password_prompt is not None:
             password = self._password_prompt(prompt)
         elif sys.stdin is not None and sys.stdin.isatty():
@@ -303,14 +304,14 @@ class ADClient:
             raise ConfigError("no password entered")
         return password
 
-    def _connect_any(self, ctx: ssl.SSLContext, password: str) -> ADClient:
+    def _connect_any(self, ctx: ssl.SSLContext, user: str, password: str) -> ADClient:
         s = self.settings
         errors = []
         for host in s.servers:
             conn = LDAPConnection(host, s.effective_port, s.tls_mode, ctx, s.timeout)
             try:
                 conn.open()
-                conn.bind(s.bind_user, password)
+                conn.bind(user, password)
             except LDAPError as exc:
                 conn.close()
                 if exc.code is not None:  # the server answered: credentials or policy, not reachability
