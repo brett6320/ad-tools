@@ -56,6 +56,7 @@ class Settings:
     reports_dir: str = "reports"
     site: str = ""  # AD site name: its DCs are tried first when discovering DCs
     dns_server: str = ""  # name servers for DC discovery (comma-separated); empty = the system's
+    debug: bool = False  # protocol trace and tracebacks (CLI)
 
     @property
     def servers(self) -> list[str]:

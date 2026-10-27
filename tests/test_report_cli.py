@@ -300,3 +300,42 @@ def test_needs_server_or_domain():
         ad_module.ADClient()
     with pytest.raises(ad_module.ConfigError, match="AD_SITE"):
         ad_module.ADClient(domain="x.com", site="bad site")
+
+
+def test_cli_always_shows_the_server(cli_env, capsys):
+    assert cli.main(["groups", "jdoe", "--format", "json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "Querying dc.test:636 (LDAPS, TLSv1.3)"
+    assert "Querying" not in captured.out  # stdout stays report paths only
+    path = cli_env / captured.out.strip()
+    assert json.loads(path.read_text())["summary"]["Server"] == "dc.test:636 (LDAPS, TLSv1.3)"
+
+
+def test_cli_debug_shows_traceback(cli_env, caplog):
+    assert cli.main(["groups", "nobody", "--debug"]) == 2
+    record = next(r for r in caplog.records if r.levelname == "ERROR")
+    assert record.exc_info is not None
+    assert ad_module.logging.getLogger("adtools").level == ad_module.logging.DEBUG
+
+
+def test_cli_debug_from_env_file(cli_env, caplog):
+    (cli_env / ".env").write_text("AD_SERVER=dc.test\nAD_DOMAIN=corp.example.com\nAD_DEBUG=true\n")
+    assert cli.main(["groups", "nobody"]) == 2
+    assert next(r for r in caplog.records if r.levelname == "ERROR").exc_info is not None
+
+
+def test_cli_default_error_has_no_traceback(cli_env, caplog):
+    assert cli.main(["groups", "nobody"]) == 2
+    assert next(r for r in caplog.records if r.levelname == "ERROR").exc_info is None
+    assert ad_module.logging.getLogger("adtools").level == ad_module.logging.WARNING
+
+
+def test_server_label_and_failover_warning(monkeypatch, caplog):
+    class TLSConn(FakeConn):
+        tls_mode = "ldaps"
+        tls_version = "TLSv1.3"
+
+    monkeypatch.setattr(ad_module, "LDAPConnection", TLSConn)
+    with ad_module.ADClient(server="down,up", domain="x.com", ssl_context=object()) as client:
+        assert client.server == "up:636 (LDAPS, TLSv1.3)"
+    assert "down:636 failed: connection refused" in caplog.text

@@ -16,7 +16,20 @@ value comes from the environment or `.env` (see [Setup](setup.md#5-configure-wit
 | `--format` | `html` | Comma-separated: `html`, `json`, `csv`, for example `--format html,csv` |
 | `--reports-dir` | `reports` (`AD_REPORTS_DIR`) | Base folder for reports |
 | `--stdout` | off | Also print a plain-text summary to the terminal |
-| `-v` | off | Debug logging |
+| `-v` | off | Show progress: the DCs found through DNS, the certificate trust mode, and the account being bound |
+| `--debug` | off (`AD_DEBUG`) | Protocol trace and tracebacks. See [Debugging](#debugging) |
+
+Every run first prints the server it is querying to **stderr**, whatever the options:
+
+```
+$ ad-query groups jdoe
+Querying dc2.corp.example.com:636 (LDAPS, TLSv1.3)
+reports/user-groups/20261027-142233_jdoe.html
+```
+
+Report paths are the only thing printed to **stdout**, so `ad-query … | xargs open` still works. The same
+server string is saved as the **Server** row of every report's summary (HTML, JSON and CSV). If a DC can't
+be reached and the next one is tried, a warning names the DC that failed.
 
 Reports are written to `<reports-dir>/<report type>/<UTC timestamp>_<subject>.<format>`, and each path is
 printed:
@@ -201,6 +214,40 @@ If no server can be reached, `ADClient.connect()` raises `LDAPError("could not c
 with the reason for each host. Certificate failures show up there as `CERTIFICATE_VERIFY_FAILED`. Rejected
 credentials are raised straight away, without trying the next server, so a bad password can't lock the
 account by being tried on every DC.
+
+## Debugging
+
+`--debug` (or `AD_DEBUG=true` in the environment or `.env`) turns on a timestamped trace, written to stderr:
+
+```
+$ ad-query groups jdoe --debug
+… DEBUG adtools.dns: DNS servers for corp.example.com: 10.0.0.10
+… DEBUG adtools.dns: > DNS SRV _ldap._tcp.dc._msdcs.corp.example.com @10.0.0.10
+… DEBUG adtools.dns: < DNS _ldap._tcp.dc._msdcs.corp.example.com: dc2.corp.example.com (prio 0, weight 100), …
+… INFO adtools.dns: domain controllers for corp.example.com from DNS: dc2.corp.example.com, dc1.corp.example.com
+… INFO adtools.tls: certificate trust: truststore
+… INFO adtools.ad: binding as CORP\jdoe
+… DEBUG adtools.ldap: connected to dc2.corp.example.com:636 (ldaps)
+… DEBUG adtools.ldap: TLS TLSv1.3, cipher TLS_AES_256_GCM_SHA384
+… DEBUG adtools.ldap: server certificate: subject commonName=dc2.corp.example.com; issuer commonName=Corp Issuing CA; SAN dc2.corp.example.com, corp.example.com, CORP; expires Mar  1 12:00:00 2027 GMT
+… DEBUG adtools.ldap: > bind as 'CORP\jdoe' (simple)
+… DEBUG adtools.ldap: < bind: success
+… DEBUG adtools.ldap: > search #2 base='DC=corp,DC=example,DC=com' scope=sub filter=(&(|(objectCategory=person)…)) attrs=[…] page_size=500
+… DEBUG adtools.ldap: < search #2 done: success, 1 entries
+```
+
+It shows:
+
+- **DNS:** the name servers used, each SRV query and its answers, and any retry over TCP.
+- **TLS:** the protocol version and cipher, and the DC certificate's subject, issuer, SAN and expiry. That's
+  usually all you need to solve a hostname-mismatch or untrusted-CA problem.
+- **LDAP:** every bind and search (base, scope, the exact filter sent, attributes, paging) and its result
+  code and entry count.
+- **A full traceback** when a command fails.
+
+**The password is never logged**, at any level. The bind line shows only the account, and a test enforces
+that. The trace does include directory data and the filters sent, so treat debug output like the reports
+themselves.
 
 ## Exit codes
 

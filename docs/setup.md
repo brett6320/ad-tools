@@ -115,6 +115,7 @@ cp .env.example .env             # Windows: copy .env.example .env
 | `AD_TIMEOUT` | `10` | Connect and read timeout, in seconds |
 | `AD_PAGE_SIZE` | `500` | Paged-results page size. `0` turns paging off. AD's default MaxPageSize is 1000 |
 | `AD_REPORTS_DIR` | `reports` | Where reports are written (relative to the current directory) |
+| `AD_DEBUG` | `false` | Same as `--debug`: protocol trace and tracebacks |
 | `AD_ENV_FILE` | | Path to a different `.env` file |
 
 **Precedence:** CLI flags and Python keyword arguments override process environment variables, which
@@ -164,7 +165,8 @@ response is truncated.
 response from steering your password to an unrelated host that happens to have a publicly trusted
 certificate. The certificate is still checked against the DC's name as usual.
 
-Run with `-v` to see the DCs that were found, in the order they're tried.
+Run with `-v` to see the DCs that were found, in the order they're tried, or `--debug` to also see each
+DNS query and answer. The DC that was actually used is always printed (`Querying …`).
 
 ### Choosing the bind account
 
@@ -226,7 +228,7 @@ text summary. If it fails:
 | Error | Likely cause |
 |---|---|
 | `could not connect to any server: … timed out` | Firewall, wrong host, or wrong port. Test with `nc -vz dc1.corp.example.com 636` (or `Test-NetConnection dc1 -Port 636` in PowerShell) |
-| `no DC SRV records found for corp.example.com` (with `-v`) | Your resolver can't see AD's DNS zone (off VPN, or public DNS). Set `AD_DNS_SERVER` to a DC's IP, or list the DCs in `AD_SERVER`. Check with `nslookup -type=SRV _ldap._tcp.dc._msdcs.corp.example.com` |
+| `no DC SRV records found for corp.example.com` (with `-v` or `--debug`) | Your resolver can't see AD's DNS zone (off VPN, or public DNS). Set `AD_DNS_SERVER` to a DC's IP, or list the DCs in `AD_SERVER`. Check with `nslookup -type=SRV _ldap._tcp.dc._msdcs.corp.example.com` |
 | `ignoring DC … it is outside corp.example.com` | An SRV record points outside the domain. This is expected for some multi-domain setups: put those DCs in `AD_SERVER` |
 | `certificate verify failed: unable to get local issuer certificate` | The DC's CA isn't trusted. See [TLS: fixing certificate errors](tls.md#fixing-certificate-errors) |
 | `certificate verify failed: Hostname mismatch` | `AD_SERVER` doesn't match the certificate. Use the DC's FQDN, not an IP address or alias |
@@ -235,7 +237,9 @@ text summary. If it fails:
 | `search failed: noSuchObject` | Wrong `AD_BASE_DN` / `AD_DOMAIN` |
 | `a password prompt needs an interactive terminal` | Run it from a terminal. Passwords are never read from files or variables |
 
-Add `-v` to any command for debug logging (the trust mode used, the server connected to).
+Every run prints the DC it's querying. Add `-v` to any command for progress messages (DCs found, the trust
+mode, the bind account), or `--debug` for a full trace of DNS, TLS (including the DC's certificate) and
+LDAP, with tracebacks. The password never appears in either. See [Usage: Debugging](usage.md#debugging).
 
 ## 7. Updating
 

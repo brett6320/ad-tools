@@ -287,6 +287,7 @@ class ADClient:
         s = self.settings
         ctx = self._ssl_context or build_ssl_context(s.trust, s.ca_file, s.ca_path, s.client_cert, s.client_key)
         user = s.effective_bind_user
+        log.info("binding as %s", user or "anonymous")
         password = self._prompt_password(user) if user else ""
         try:
             return self._connect_any(ctx, user, password)
@@ -327,9 +328,11 @@ class ADClient:
                 if exc.code is not None:  # the server answered: credentials or policy, not reachability
                     raise
                 errors.append(f"{host}: {exc}")
+                log.warning("%s:%s failed: %s", host, s.effective_port, exc)
             except (OSError, ssl.SSLError) as exc:
                 conn.close()
                 errors.append(f"{host}: {exc}")
+                log.warning("%s:%s failed: %s", host, s.effective_port, exc)
             else:
                 self._conn = conn
                 return self
@@ -345,6 +348,13 @@ class ADClient:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    @property
+    def server(self) -> str:
+        """The server this client is connected to, e.g. ``dc1.corp.example.com:636 (LDAPS, TLSv1.3)``."""
+        conn = self.connection
+        details = ", ".join(filter(None, ["LDAPS" if conn.tls_mode == "ldaps" else "StartTLS", conn.tls_version]))
+        return f"{conn.host}:{conn.port} ({details})"
 
     @property
     def connection(self) -> LDAPConnection:

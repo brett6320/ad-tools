@@ -297,3 +297,17 @@ def test_macos_keychain_pem(monkeypatch):
 
     monkeypatch.setattr(tls.os.path, "exists", lambda p: False)
     assert tls.macos_keychain_pem() == ""
+
+
+@needs_openssl
+def test_debug_trace_shows_tls_and_certificate_but_never_the_password(pki, caplog):
+    caplog.set_level("DEBUG", logger="adtools")
+    server = TLSLDAPServer(pki)
+    ctx = tls.build_ssl_context("bundle", ca_file=pki / "ca.pem")
+    with _connect(server.port, ctx) as conn:
+        assert conn.tls_version.startswith("TLSv1.")
+        conn.bind("jdoe@corp.example.com", "s3cret-pw")
+    text = caplog.text
+    assert "server certificate: subject commonName=localhost; issuer commonName=adtools test CA; SAN localhost" in text
+    assert "> bind as 'jdoe@corp.example.com' (simple)" in text and "< bind: success" in text
+    assert "s3cret-pw" not in text

@@ -26,7 +26,7 @@ Set `AD_TRUST` (or `--trust`) to choose where trusted CA certificates come from.
 2. Otherwise `truststore`, if the package is installed.
 3. Otherwise `system`.
 
-Run with `-v` to log which mode was used.
+Run with `-v` to log which mode was used, or `--debug` to see the certificate the DC presented.
 
 ### `truststore`: the operating system verifies the certificate
 

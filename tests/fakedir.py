@@ -114,6 +114,8 @@ class FakeADClient(ADClient):
         super().__init__(Settings(server="dc.test", base_dn=BASE))
         self.directory = directory
 
+    server = "dc.test:636 (LDAPS, TLSv1.3)"
+
     def search(self, search_filter, attributes=(), base=None, scope="sub", size_limit=0):
         base = self.settings.search_base if base is None else base
         for e in self.directory.search(base, search_filter, scope):

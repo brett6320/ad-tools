@@ -56,7 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     out.add_argument("--reports-dir", help="where reports are written (AD_REPORTS_DIR; default: reports)")
     out.add_argument("--stdout", action="store_true", help="also print a plain-text summary")
-    common.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    common.add_argument("-v", "--verbose", action="store_true", help="show progress: DCs found, trust mode, bind account")
+    common.add_argument(
+        "--debug",
+        action="store_const",
+        const=True,
+        help="protocol trace (LDAP, DNS, TLS certificate) and tracebacks; never shows the password (AD_DEBUG)",
+    )
 
     parser = argparse.ArgumentParser(
         prog="ad-query",
@@ -97,7 +103,8 @@ def _formats(value: str) -> tuple[str, ...]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
+    _configure_logging(debug=bool(args.debug), verbose=args.verbose)
+    settings = None
     try:
         formats = _formats(args.format)
         settings = load_settings(
@@ -116,17 +123,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             ca_file=args.ca_file,
             timeout=args.timeout,
             reports_dir=args.reports_dir,
+            debug=args.debug,
         )
+        if settings.debug and not args.debug:  # AD_DEBUG from the environment or .env
+            _configure_logging(debug=True, verbose=args.verbose)
         with ADClient(settings) as ad:
+            print(f"Querying {ad.server}", file=sys.stderr)
             report = _run(ad, args)
+            report.summary.append(("Server", ad.server))
     except (ConfigError, TLSConfigError, FilterError, NotFoundError, AmbiguousError, LDAPError, OSError) as exc:
-        log.error("%s", exc)
+        if settings.debug if settings else args.debug:
+            log.exception("%s", exc)
+        else:
+            log.error("%s", exc)
         return 2
     for path in write_report(report, settings.reports_dir, formats):
         print(path)
     if args.stdout:
         print(render_text(report), end="")
     return 0
+
+
+def _configure_logging(debug: bool, verbose: bool) -> None:
+    if debug:
+        level, fmt = logging.DEBUG, "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    else:
+        level, fmt = (logging.INFO if verbose else logging.WARNING), "%(levelname)s %(message)s"
+    logging.basicConfig(format=fmt)  # no-op when the host application already configured logging
+    logging.getLogger("adtools").setLevel(level)
 
 
 def _run(ad: ADClient, args: argparse.Namespace) -> Report:
