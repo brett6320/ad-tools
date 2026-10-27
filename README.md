@@ -34,7 +34,7 @@ source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.
 python -m pip install --upgrade pip
 python -m pip install -e ".[truststore]"
 
-cp .env.example .env               # then set AD_SERVER, AD_DOMAIN, AD_BIND_USER
+cp .env.example .env               # then set AD_SERVER, AD_DOMAIN and AD_BIND_USER (or AD_BIND_DOMAIN)
 ad-query groups jdoe               # you are prompted for the bind password
 ad-query groups john.doe@corp.example.com
 ad-query members "VPN Users"

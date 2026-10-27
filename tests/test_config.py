@@ -145,3 +145,43 @@ def test_password_is_never_a_setting(tmp_path):
     assert "hunter2" not in str(excinfo.value)
     with pytest.raises(TypeError, match="unknown setting"):
         load_settings(environ={}, password="hunter2")
+
+
+@pytest.mark.parametrize(
+    ("bind_user", "bind_domain", "expected"),
+    [
+        ("", "", ""),
+        ("svc@corp.example.com", "", "svc@corp.example.com"),
+        ("svc@corp.example.com", "CORP", "svc@corp.example.com"),  # already qualified: UPN
+        ("OTHER\\svc", "CORP", "OTHER\\svc"),  # already qualified: down-level
+        ("CN=svc,OU=Svc,DC=corp", "CORP", "CN=svc,OU=Svc,DC=corp"),  # already qualified: DN
+        ("svc", "CORP", "CORP\\svc"),  # bare name gets the prefix
+        ("svc", "CORP\\", "CORP\\svc"),  # trailing backslash tolerated
+        ("", "CORP", "CORP\\posixuser"),  # local login name
+    ],
+)
+def test_effective_bind_user(monkeypatch, bind_user, bind_domain, expected):
+    monkeypatch.setattr(config.getpass, "getuser", lambda: "posixuser")
+    assert Settings(bind_user=bind_user, bind_domain=bind_domain).effective_bind_user == expected
+
+
+def test_bind_domain_from_env_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config.getpass, "getuser", lambda: "jdoe")
+    p = tmp_path / ".env"
+    p.write_text("AD_SERVER=dc\nAD_BIND_DOMAIN=CORP\n")
+    assert load_settings(env_file=p, environ={}).validate().effective_bind_user == "CORP\\jdoe"
+
+
+def test_bind_domain_unknown_local_user(monkeypatch):
+    def fail():
+        raise OSError("No username set in the environment")
+
+    monkeypatch.setattr(config.getpass, "getuser", fail)
+    with pytest.raises(ConfigError, match="local user name is unknown"):
+        _ = Settings(bind_domain="CORP").effective_bind_user
+
+
+@pytest.mark.parametrize("domain", ["corp.example.com@x", "A\\B", "CORP CO", "DC=corp"])
+def test_bind_domain_validation(domain):
+    with pytest.raises(ConfigError, match="NetBIOS"):
+        Settings(server="dc", bind_domain=domain).validate()
