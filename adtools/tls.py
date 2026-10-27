@@ -115,7 +115,7 @@ def build_ssl_context(
     ctx.verify_mode = ssl.CERT_REQUIRED
     if client_cert:
         ctx.load_cert_chain(os.fspath(client_cert), os.fspath(client_key) if client_key else None)
-    log.debug("TLS trust mode: %s", mode)
+    log.info("certificate trust: %s%s", mode, f" ({ca_file or ca_path})" if mode == "bundle" else "")
     return ctx
 
 

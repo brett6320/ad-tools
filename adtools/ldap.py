@@ -135,7 +135,14 @@ class LDAPConnection:
             raise
         self._encrypted = True
         log.debug("connected to %s:%s (%s)", self.host, self.port, self.tls_mode)
+        if log.isEnabledFor(logging.DEBUG):
+            _log_tls_session(self._sock)
         return self
+
+    @property
+    def tls_version(self) -> str:
+        version = getattr(self._sock, "version", None)
+        return (version() or "") if callable(version) else ""
 
     def _start_tls(self) -> None:
         op = ber.sequence(ber.octet_string(STARTTLS_OID, tag=0x80), tag=EXTENDED_REQUEST)
@@ -144,6 +151,7 @@ class LDAPConnection:
         if tag != EXTENDED_RESPONSE:
             raise LDAPError(f"unexpected response 0x{tag:02x} to StartTLS")
         result = _parse_result(body)
+        log.debug("< StartTLS: %s", result.name)
         if result.code != 0:
             raise LDAPError(f"StartTLS failed: {result.name} {result.diagnostic}".strip(), result.code, result.diagnostic)
         if self._buffer:
@@ -180,6 +188,7 @@ class LDAPConnection:
         if user and not password:
             # An empty password makes AD perform an *unauthenticated* bind that "succeeds".
             raise LDAPError("a password is required for a simple bind")
+        log.debug("> bind as %r (simple)", user or "<anonymous>")  # never log the password
         op = ber.sequence(
             ber.integer(3),
             ber.octet_string(user),
@@ -191,6 +200,7 @@ class LDAPConnection:
         if tag != BIND_RESPONSE:
             raise LDAPError(f"unexpected response 0x{tag:02x} to bind")
         result = _parse_result(body)
+        log.debug("< bind: %s %s", result.name, result.diagnostic)
         if result.code != 0:
             raise LDAPError(f"bind failed: {result.name} {result.diagnostic}".strip(), result.code, result.diagnostic)
 
@@ -230,10 +240,22 @@ class LDAPConnection:
                     tag=CONTROLS,
                 )
             msg_id = self._send(op, controls)
+            log.debug(
+                "> search #%s base=%r scope=%s filter=%s attrs=%s page_size=%s%s",
+                msg_id,
+                base,
+                scope,
+                search_filter,
+                list(attributes) or "all",
+                page_size,
+                " (next page)" if cookie else "",
+            )
+            page_entries = 0
             while True:
                 tag, body, response_controls = self._receive(msg_id)
                 if tag == SEARCH_RESULT_ENTRY:
                     returned += 1
+                    page_entries += 1
                     yield _parse_entry(body)
                 elif tag == SEARCH_RESULT_REFERENCE:
                     continue  # referrals to other naming contexts are not chased
@@ -246,6 +268,7 @@ class LDAPConnection:
                 return
             if result.code != 0:
                 raise LDAPError(f"search failed: {result.name} {result.diagnostic}".strip(), result.code, result.diagnostic)
+            log.debug("< search #%s done: %s, %s entries", msg_id, result.name, page_entries)
             cookie = _paged_cookie(response_controls) if page_size else b""
             if not cookie:
                 return
@@ -298,6 +321,28 @@ class LDAPConnection:
             if not chunk:
                 raise LDAPError("connection closed by server")
             self._buffer += chunk
+
+
+def _log_tls_session(sock: object) -> None:
+    try:
+        cert = sock.getpeercert()  # type: ignore[attr-defined]
+        version, cipher = sock.version(), sock.cipher()  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        return
+    log.debug("TLS %s, cipher %s", version, cipher[0] if cipher else "?")
+    if cert:
+
+        def name(rdns):
+            return ", ".join(f"{k}={v}" for rdn in rdns for k, v in rdn)
+
+        sans = ", ".join(v for k, v in cert.get("subjectAltName", ()) if k in ("DNS", "IP Address"))
+        log.debug(
+            "server certificate: subject %s; issuer %s; SAN %s; expires %s",
+            name(cert.get("subject", ())),
+            name(cert.get("issuer", ())),
+            sans or "-",
+            cert.get("notAfter", "?"),
+        )
 
 
 def _parse_result(body: bytes) -> LDAPResult:

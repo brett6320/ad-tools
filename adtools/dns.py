@@ -169,17 +169,23 @@ def _address(nameserver: str) -> tuple[int, tuple]:
 def query_srv(name: str, nameserver: str, timeout: float = 3.0) -> list[SRVRecord]:
     family, address = _address(nameserver)
     query_id, query = build_query(name)
+    log.debug("> DNS SRV %s @%s", name, nameserver)
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
         sock.connect(address)  # only accept datagrams from the server we asked
         sock.send(query)
         records, truncated = parse_srv_response(sock.recv(65535), query_id)
     if not truncated:
+        log.debug(
+            "< DNS %s: %s", name, ", ".join(f"{r.target} (prio {r.priority}, weight {r.weight})" for r in records) or "no records"
+        )
         return records
+    log.debug("< DNS response truncated; retrying %s over TCP", name)
     with socket.create_connection(address[:2], timeout=timeout) as sock:
         sock.sendall(struct.pack("!H", len(query)) + query)
         length = struct.unpack("!H", _recv_exact(sock, 2))[0]
         records, _ = parse_srv_response(_recv_exact(sock, length), query_id)
+    log.debug("< DNS %s (TCP): %s records", name, len(records))
     return records
 
 
@@ -351,6 +357,7 @@ def discover_domain_controllers(
     """Return DC host names for ``domain`` in connection order, falling back to the domain name itself."""
     domain = domain.strip().rstrip(".").lower()
     servers = nameservers or system_nameservers(domain)
+    log.debug("DNS servers for %s: %s", domain, ", ".join(servers) or "none")
     hosts: list[str] = []
     if servers:
         for name in srv_names(domain, site, global_catalog):
@@ -362,7 +369,7 @@ def discover_domain_controllers(
     else:
         log.debug("no DNS servers found for SRV lookups")
     if hosts:
-        log.debug("discovered domain controllers for %s: %s", domain, ", ".join(hosts))
+        log.info("domain controllers for %s from DNS: %s", domain, ", ".join(hosts))
         return hosts
     log.info("no DC SRV records found for %s; connecting to the domain name itself", domain)
     return [domain]

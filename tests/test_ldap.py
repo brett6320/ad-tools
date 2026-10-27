@@ -146,3 +146,20 @@ def test_operations_need_open_connection():
     conn._encrypted = True
     with pytest.raises(LDAPError, match="not open"):
         conn.bind("u", "p")
+
+
+def test_debug_trace_of_search(caplog):
+    caplog.set_level("DEBUG", logger="adtools")
+
+    def handler(tag, op, c):
+        if tag == BIND_REQUEST:
+            return [(bind_ok(), None)]
+        return [(entry("CN=a"), None), (entry("CN=b"), None), (done(), None)]
+
+    server, conn = connect(handler)
+    conn.bind("svc", "hunter2")
+    assert len(list(conn.search("DC=x", "(cn=*)", ["cn"]))) == 2
+    assert "> search #2 base='DC=x' scope=sub filter=(cn=*) attrs=['cn'] page_size=500" in caplog.text
+    assert "< search #2 done: success, 2 entries" in caplog.text
+    assert "hunter2" not in caplog.text
+    assert conn.tls_version == ""  # a plain test socket has no TLS
