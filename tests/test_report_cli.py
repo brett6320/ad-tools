@@ -271,3 +271,32 @@ def test_cli_bind_domain_flag(cli_env, monkeypatch):
     (cli_env / ".env").write_text("AD_SERVER=dc.test\nAD_DOMAIN=corp.example.com\n")
     assert cli.main(["groups", "jdoe", "--bind-domain", "CORP", "--bind-user", "alice"]) == 0
     assert seen["user"] == "CORP\\alice"
+
+
+def test_client_discovers_dcs_when_no_server(monkeypatch):
+    seen = {}
+
+    def fake_discover(domain, site, global_catalog, nameservers, timeout):
+        seen.update(domain=domain, site=site, gc=global_catalog, ns=nameservers)
+        return ["down", "up"]
+
+    FakeConn.opened = []
+    monkeypatch.setattr(ad_module, "LDAPConnection", FakeConn)
+    monkeypatch.setattr(ad_module, "discover_domain_controllers", fake_discover)
+    client = ad_module.ADClient(domain="corp.example.com", site="HQ", dns_server="10.0.0.10, 10.0.0.11", ssl_context=object())
+    with client:
+        assert client.connection.host == "up"
+    assert seen == {"domain": "corp.example.com", "site": "HQ", "gc": False, "ns": ["10.0.0.10", "10.0.0.11"]}
+    assert FakeConn.opened == ["down:636", "up:636"]
+
+
+def test_explicit_server_skips_discovery(monkeypatch):
+    monkeypatch.setattr(ad_module, "discover_domain_controllers", lambda *a, **k: pytest.fail("discovered"))
+    assert ad_module.ADClient(server="dc9", domain="corp.example.com").server_candidates() == ["dc9"]
+
+
+def test_needs_server_or_domain():
+    with pytest.raises(ad_module.ConfigError, match="AD_DOMAIN to find"):
+        ad_module.ADClient()
+    with pytest.raises(ad_module.ConfigError, match="AD_SITE"):
+        ad_module.ADClient(domain="x.com", site="bad site")

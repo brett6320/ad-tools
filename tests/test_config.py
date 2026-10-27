@@ -37,7 +37,7 @@ def test_env_example_parses():
     from pathlib import Path
 
     values = parse_env_file(Path(__file__).parent.parent / ".env.example")
-    assert values["AD_SERVER"] == "dc1.corp.example.com,dc2.corp.example.com"
+    assert "AD_SERVER" not in values  # DCs are discovered through DNS from AD_DOMAIN by default
     assert values["AD_TRUST"] == "auto" and "AD_PASSWORD" not in values
     s = load_settings(env_file=Path(__file__).parent.parent / ".env.example", environ={}).validate()
     assert s.search_base == "DC=corp,DC=example,DC=com" and s.effective_port == 636

@@ -32,7 +32,9 @@ No real directory is needed:
 | `tests/test_ber_filters.py` | BER encoding/decoding limits, the RFC 4515 filter parser and escaping (including injection attempts) |
 | `tests/test_ldap.py` | The LDAP wire protocol against `tests/fakeldap.py`, a scripted server on a socket pair: bind, result codes, paging cookies, referrals, chunked reads, disconnects |
 | `tests/test_tls.py` | Real TLS handshakes against a local server, with a throwaway CA and certificate made by the `openssl` CLI. Covers LDAPS and StartTLS, hostname mismatch, untrusted CA, and each trust mode's loading logic (macOS keychain export and the Linux bundle fallback are mocked). The handshake tests are skipped if `openssl` isn't installed |
-| `tests/test_config.py` | `.env` parsing, discovery and precedence, and rejection of `AD_PASSWORD` |
+| `tests/test_config.py` | `.env` parsing, discovery and precedence, rejection of `AD_PASSWORD`, and how the bind name is built from `AD_BIND_DOMAIN` |
+| `tests/test_dns.py` | DC discovery: DNS wire format (name compression, loops, truncation), a local UDP/TCP DNS server, SRV ordering, site-first lookup, rejection of DCs outside the domain, the fallback to the domain name, and name server discovery from `resolv.conf` / `scutil` |
+| `tests/test_entrypoints.py` | Every tracked script with a `#!` line has the execute bit in git, and `./ad-query` and `python -m adtools` both run |
 | `tests/test_ad.py` | User/group lookups, direct, nested and primary-group membership, and comparisons, run against `tests/fakedir.py`. That in-memory directory evaluates the compiled BER filters, including `LDAP_MATCHING_RULE_IN_CHAIN` |
 | `tests/test_report_cli.py` | HTML/JSON/CSV output (escaping, CSV formula neutralization), the CLI end to end, failover and password prompting |
 
@@ -55,4 +57,6 @@ never leaks into the tests.
 - **The LDAP client is read-only.** Don't add modify, add, delete or modDN operations.
 - **TLS is never optional, and no password setting is ever added.**
 - Any user input that goes into a filter must go through `escape_filter_value`.
+- Scripts with a `#!` line must be executable in git: `chmod +x FILE && git update-index --chmod=+x FILE`.
+  `tests/test_entrypoints.py` enforces this.
 - Work on a branch and open a pull request. Don't commit to `main`.

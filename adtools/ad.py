@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import ConfigError, Settings, load_settings
+from .dns import discover_domain_controllers
 from .filters import escape_filter_value
 from .ldap import Entry, LDAPConnection, LDAPError
 from .tls import build_ssl_context
@@ -292,6 +293,15 @@ class ADClient:
         finally:
             del password
 
+    def server_candidates(self) -> list[str]:
+        """``AD_SERVER`` if set, else the domain controllers found through DNS for ``AD_DOMAIN``."""
+        s = self.settings
+        if s.servers:
+            return s.servers
+        return discover_domain_controllers(
+            s.domain, site=s.site, global_catalog=s.global_catalog, nameservers=s.dns_servers, timeout=min(s.timeout, 5.0)
+        )
+
     def _prompt_password(self, user: str) -> str:
         prompt = f"Password for {user}: "
         if self._password_prompt is not None:
@@ -307,7 +317,7 @@ class ADClient:
     def _connect_any(self, ctx: ssl.SSLContext, user: str, password: str) -> ADClient:
         s = self.settings
         errors = []
-        for host in s.servers:
+        for host in self.server_candidates():
             conn = LDAPConnection(host, s.effective_port, s.tls_mode, ctx, s.timeout)
             try:
                 conn.open()

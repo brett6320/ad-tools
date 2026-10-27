@@ -31,7 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     conn = common.add_argument_group("connection (defaults come from the environment or .env)")
     conn.add_argument("--env-file", help="path to a .env file (default: nearest .env)")
-    conn.add_argument("--server", help="DC host name, or a comma-separated list tried in order (AD_SERVER)")
+    conn.add_argument(
+        "--server", help="DC host name, or a comma-separated list tried in order (AD_SERVER; default: found via DNS)"
+    )
+    conn.add_argument("--site", help="AD site whose DCs are tried first during DNS discovery (AD_SITE)")
+    conn.add_argument("--dns-server", help="name server(s) for DC discovery, comma-separated (AD_DNS_SERVER)")
     conn.add_argument("--port", type=int, help="port (AD_PORT; default 636, 389 for StartTLS, 3269/3268 with --gc)")
     conn.add_argument("--tls-mode", choices=TLS_MODES, help="ldaps (implicit TLS) or starttls (AD_TLS_MODE)")
     conn.add_argument("--gc", dest="global_catalog", action="store_const", const=True, help="query the global catalog")
@@ -99,6 +103,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = load_settings(
             env_file=args.env_file,
             server=args.server,
+            site=args.site,
+            dns_server=args.dns_server,
             port=args.port,
             tls_mode=args.tls_mode,
             global_catalog=args.global_catalog,
