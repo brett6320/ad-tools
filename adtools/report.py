@@ -376,7 +376,7 @@ _CSS = """
 --pop:#1c2029;--hover:#252b36;--shadow:0 8px 24px rgba(0,0,0,.5)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-main{max-width:1280px;margin:0 auto;padding:24px 16px 48px}
+main{padding:24px 16px 48px}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:32px 0 4px}
 .meta,.note{color:var(--muted);font-size:12.5px}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:16px 0;padding:12px 16px;
@@ -401,7 +401,8 @@ cursor:pointer;font-size:11px;line-height:1;color:var(--muted);vertical-align:mi
 .xf-btn:hover{border-color:var(--accent);color:var(--accent)}
 th.xf-on .xf-btn{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 tr:last-child td{border-bottom:0}
-td.dn{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--muted)}
+td.desc{min-width:16em}
+td.dn{min-width:12em;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--muted)}
 .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;white-space:nowrap}
 .pill.direct{background:var(--direct)}.pill.nested{background:var(--nested)}.pill.primary{background:var(--primary)}
 .yes{color:var(--warn);font-weight:600}
@@ -628,4 +629,6 @@ def _cell(column: str, value: Any) -> str:
         return f'<td class="{"yes" if value else ""}">{text}</td>'
     if column == "dn":
         return f'<td class="dn">{text}</td>'
+    if column == "description":
+        return f'<td class="desc"{data}>{text}</td>'
     return f"<td{data}>{text}</td>"

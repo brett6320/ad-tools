@@ -434,3 +434,10 @@ def test_tree_and_filter_data_are_escaped(fake):
     assert "<img" not in html_text
     assert "&lt;img src=x onerror=alert(1)&gt;" in html_text
     assert r'data-v="[&quot;&lt;img src=x onerror=alert(1)&gt;\&quot;&quot;]"' in html_text  # Outer's via groups
+
+
+def test_html_uses_full_width_and_wraps_long_cells(fake):
+    html = render_html(user_groups_report(fake.user_groups("jdoe")))
+    assert "max-width:1280px" not in html
+    assert '<td class="desc">' in html and "td.desc{min-width:" in html
+    assert "overflow-wrap:anywhere" in html
