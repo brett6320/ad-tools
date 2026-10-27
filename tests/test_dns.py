@@ -175,13 +175,26 @@ class FakeDNSServer:
     def __init__(self, zones, truncate=False):
         self.zones = zones
         self.truncate = truncate
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp.bind(("127.0.0.1", 0))
-        self.port = self.udp.getsockname()[1]
-        self.tcp = socket.create_server(("127.0.0.1", self.port))
+        self.tcp, self.udp = self._bind_pair()
+        self.port = self.tcp.getsockname()[1]
         self.queries = []
         threading.Thread(target=self._serve_udp, daemon=True).start()
         threading.Thread(target=self._serve_tcp, daemon=True).start()
+
+    @staticmethod
+    def _bind_pair():
+        """A TCP and a UDP socket on the same port (Windows reserves some ports for one protocol only)."""
+        for _ in range(50):
+            tcp = socket.create_server(("127.0.0.1", 0))
+            udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                udp.bind(("127.0.0.1", tcp.getsockname()[1]))
+            except OSError:
+                tcp.close()
+                udp.close()
+                continue
+            return tcp, udp
+        raise RuntimeError("no port free for both TCP and UDP")
 
     def _answer(self, query, allow_truncate):
         name, _ = decode_name(query, 12)
