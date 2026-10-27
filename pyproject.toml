@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ad-tools"
+dynamic = ["version"]
+description = "Query Active Directory over LDAPS or StartTLS using the Python standard library, with HTML reports"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+truststore = ["truststore>=0.10.5"]
+
+[project.scripts]
+ad-query = "adtools.cli:main"
+
+[tool.setuptools]
+packages = ["adtools"]
+
+[tool.setuptools.dynamic]
+version = { attr = "adtools.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["adtools"]
+omit = ["adtools/__main__.py"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "A", "C4", "SIM", "RUF"]
+ignore = ["S101", "RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B011", "RUF059"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]

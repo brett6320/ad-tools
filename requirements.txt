@@ -1,0 +1,2 @@
+# Runtime: standard library only. truststore is optional (recommended) for OS-native trust stores.
+truststore>=0.10.5
