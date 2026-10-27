@@ -1,10 +1,10 @@
 {
-  "tests": 200,
-  "passed": 200,
+  "tests": 201,
+  "passed": 201,
   "failed": 0,
   "skipped": 0,
   "xfailed": 0,
-  "seconds": 23.31,
+  "seconds": 10.35,
   "coverage": 97.5,
   "python": "3.13"
 }
