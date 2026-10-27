@@ -14,8 +14,9 @@ against the operating system's own trust store.
 | `compare USER1 USER2` | Compare two users' group memberships: groups only the first is in, groups only the second is in, and groups they share (showing how each one is a member) |
 | `search FILTER` | Run any RFC 4515 LDAP filter |
 
-By default every command writes a self-contained **HTML report** under `reports/<command>/`. You can sort
-and filter its tables in the browser. JSON and CSV are also available.
+By default every command writes a self-contained **HTML report** under `reports/<command>/`. Its tables
+have Excel-style filters on every column. `groups` and `members` also show a collapsible tree of how the
+nested memberships connect. JSON and CSV are also available.
 
 ```
 reports/
